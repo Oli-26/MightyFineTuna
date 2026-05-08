@@ -154,3 +154,75 @@ concentric circles in pastel colors
 a checkerboard with one missing square
 a rainbow gradient with stars
 a mosaic of colorful triangles
+
+# === third batch (50 unique additions, deduped against second batch) ===
+
+# buildings / architecture
+a lighthouse on rocky coast
+a windmill in countryside
+a japanese pagoda with red roof
+a medieval castle on a hill
+a wooden bridge over a stream
+a clock tower at sunset
+a stone temple with steps
+a barn with a weathervane
+
+# mythical creatures
+a unicorn in a meadow
+a phoenix rising in flames
+a mermaid on a rock
+a centaur drawing a bow
+a griffin perched on a cliff
+a yeti in a cave
+a fairy with butterfly wings
+a werewolf howling
+
+# more sea life and insects
+a colorful jellyfish drifting
+a ladybug on grass
+an octopus among coral
+a spider on its web
+
+# weather and sky
+a rainbow over rolling hills
+a tornado spiraling
+a foggy lake in morning
+an aurora over pines
+a comet with long tail
+a windy autumn scene with falling leaves
+
+# more instruments and tools
+an electric guitar
+a microscope on a desk
+a brass sextant
+a telescope pointing at stars
+
+# sports and games
+a soccer ball in a net
+a basketball going through hoop
+a skateboard with stickers
+a tennis racket and ball
+
+# space and sci-fi
+an alien with three eyes
+a satellite orbiting earth
+a ringed planet in space
+a moon base with dome
+a lightsaber duel
+a robot dog wagging its tail
+
+# tech and modern
+a vintage gameboy
+a video game controller
+a vinyl record on a turntable
+a retro arcade machine
+
+# plants
+a bonsai tree on a shelf
+a venus flytrap snapping
+a pumpkin in a patch
+
+# holidays and decor
+a christmas tree with ornaments
+a jack-o-lantern grinning
+fireworks bursting in night sky
