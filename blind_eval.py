@@ -20,6 +20,13 @@ Three modes:
 
    Joins on prompt; only emits pairs where both sides succeeded.
 
+2b) N-way combine (3+ models, e.g. base vs tuned-r16 vs tuned-r64 vs teacher):
+     ./blind_eval.py --combine side_base.jsonl side_r16.jsonl side_r64.jsonl
+     ./blind_eval.py --combine side_*.jsonl --names base r16 r64
+
+   Joins on prompt across all sides. Only emits records where ALL sides have
+   non-empty code. Schema is "blind-multi-v1" (vs 2-way "blind-pair-v1").
+
 3) Stats on what's been judged:
      ./blind_eval.py --stats
 """
@@ -196,6 +203,67 @@ def cmd_pair(args) -> int:
     return 0
 
 
+def cmd_combine(args) -> int:
+    """N-way combine: join N side files on prompt, emit blind-multi-v1 records."""
+    files = args.combine
+    if len(files) < 2:
+        print("need ≥2 side files", file=sys.stderr); return 1
+
+    # Load each side
+    sides: list[dict[str, dict]] = []
+    side_labels: list[str] = []
+    for i, fp in enumerate(files):
+        path = Path(fp)
+        if not path.exists():
+            print(f"missing: {fp}", file=sys.stderr); return 1
+        recs = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+        sides.append({r["prompt"]: r for r in recs})
+        # Label: --names override, else the file's `side` field, else stem
+        label = args.names[i] if args.names and i < len(args.names) else recs[0].get("side") if recs else None
+        if not label: label = path.stem
+        side_labels.append(label)
+
+    print(f"[combine] sides: {dict(zip(side_labels, [len(s) for s in sides]))}", file=sys.stderr)
+
+    # Intersect prompts across all sides
+    common = set(sides[0])
+    for s in sides[1:]: common &= set(s)
+    common = sorted(common)
+    if not common:
+        print("no common prompts across all sides", file=sys.stderr); return 1
+
+    out_path = ROOT / args.out
+    n = 0; skipped = 0
+    with out_path.open("w") as f:
+        for prompt in common:
+            slots = []
+            ok = True
+            for s, label in zip(sides, side_labels):
+                r = s[prompt]
+                if not r.get("code"):
+                    ok = False; break
+                slots.append({
+                    "label": label,
+                    "code": r["code"],
+                    "model": r.get("model"),
+                    "temp": r.get("temp"),
+                })
+            if not ok:
+                skipped += 1; continue
+            rec = {
+                "id": str(uuid.uuid4()),
+                "ts": time.time(),
+                "schema": "blind-multi-v1",
+                "prompt": prompt,
+                "candidates": slots,
+            }
+            f.write(json.dumps(rec) + "\n")
+            n += 1
+    print(f"[combine] wrote {n} N-way records (N={len(files)}) to {out_path} (skipped {skipped} for empty code)")
+    print(f"[combine] labels: {side_labels}")
+    return 0
+
+
 def cmd_stats(args) -> int:
     judgments_path = ROOT / "eval_judgments.jsonl"
     pairs_path = ROOT / "eval_pairs.jsonl"
@@ -231,6 +299,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--max-tokens", type=int, default=1500)
     ap.add_argument("--overwrite", action="store_true")
     ap.add_argument("--pair", nargs=2, metavar=("SIDE_BASE", "SIDE_TUNED"), help="pair two side files")
+    ap.add_argument("--combine", nargs="+", metavar="SIDE", help="N-way combine: 3+ side files")
+    ap.add_argument("--names", nargs="+", help="labels for --combine slots (default: side field or filename)")
     ap.add_argument("--out", default="eval_pairs.jsonl")
     ap.add_argument("--stats", action="store_true")
     return ap
@@ -240,6 +310,8 @@ def main() -> int:
     args = build_parser().parse_args()
     if args.stats:
         return cmd_stats(args)
+    if args.combine:
+        return cmd_combine(args)
     if args.pair:
         return cmd_pair(args)
     if args.side:

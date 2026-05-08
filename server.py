@@ -380,10 +380,9 @@ def _judged_pair_ids() -> set[str]:
 
 @app.get("/blind/next")
 async def blind_next(skip: str = ""):
-    """Return one unjudged pair, with random L/R assignment.
-    Client sends back the picked side + the assignment so we can score it.
-    `skip` (comma-separated pair_ids) lets the client avoid pairs already shown
-    in the current session (without committing a judgment yet).
+    """Return one unjudged record. Handles 2-way ('blind-pair-v1') and N-way
+    ('blind-multi-v1') schemas. Slots returned in random order; truth labels
+    sent so the client can echo them back for scoring.
     """
     pairs = _load_pairs()
     if not pairs:
@@ -393,18 +392,42 @@ async def blind_next(skip: str = ""):
     remaining = [p for p in pairs if p["id"] not in judged and p["id"] not in skipped]
     if not remaining:
         return {"empty": True, "total": len(pairs), "reason": "all pairs judged or skipped"}
-    # pick first remaining (deterministic order); client decides session length
     pair = remaining[0]
-    # random L/R assignment + ephemeral truth token (we don't trust the client)
+    schema = pair.get("schema", "blind-pair-v1")
+
+    if schema == "blind-multi-v1":
+        # N-way: shuffle candidate order, send slots with hidden truth labels
+        cands = pair["candidates"]
+        n = len(cands)
+        order = list(range(n))
+        secrets.SystemRandom().shuffle(order)
+        slots = [
+            {"slot": i, "code": cands[order[i]]["code"], "_label": cands[order[i]]["label"]}
+            for i in range(n)
+        ]
+        return {
+            "empty": False,
+            "schema": "blind-multi-v1",
+            "pair_id": pair["id"],
+            "prompt": pair["prompt"],
+            "slots": slots,
+            "n": n,
+            "remaining": len(remaining),
+            "total": len(pairs),
+            "judged": len(judged),
+        }
+
+    # Legacy 2-way schema
     left_is = "base" if secrets.randbelow(2) == 0 else "tuned"
     right_is = "tuned" if left_is == "base" else "base"
     return {
         "empty": False,
+        "schema": "blind-pair-v1",
         "pair_id": pair["id"],
         "prompt": pair["prompt"],
         "left_code":  pair[left_is]["code"],
         "right_code": pair[right_is]["code"],
-        "_left_is": left_is,    # client echoes back; we still verify against pair store
+        "_left_is": left_is,
         "_right_is": right_is,
         "remaining": len(remaining),
         "total": len(pairs),
@@ -414,19 +437,47 @@ async def blind_next(skip: str = ""):
 
 class BlindJudgeReq(BaseModel):
     pair_id: str
-    picked: str          # "left" | "right" | "unsure"
-    left_is: str         # echoed: "base" or "tuned"
+    # 2-way fields:
+    picked: str | None = None       # "left" | "right" | "unsure"
+    left_is: str | None = None      # "base" or "tuned"
+    # N-way fields:
+    rankings: list[int] | None = None  # rank per slot (1=best, len=worst); ties allowed
+    slot_labels: list[str] | None = None  # echoed: model label per slot index
 
 
 @app.post("/blind/judge")
 async def blind_judge(req: BlindJudgeReq):
+    pair = next((p for p in _load_pairs() if p["id"] == req.pair_id), None)
+    if not pair:
+        raise HTTPException(404, f"pair {req.pair_id} not found")
+    schema = pair.get("schema", "blind-pair-v1")
+
+    if schema == "blind-multi-v1":
+        if req.rankings is None or req.slot_labels is None:
+            raise HTTPException(400, "rankings + slot_labels required for blind-multi-v1")
+        if len(req.rankings) != len(pair["candidates"]) or len(req.slot_labels) != len(pair["candidates"]):
+            raise HTTPException(400, "length mismatch")
+        # Build per-label rank
+        per_label = {req.slot_labels[i]: req.rankings[i] for i in range(len(req.rankings))}
+        rec = {
+            "ts": time.time(),
+            "schema": "blind-judge-multi-v1",
+            "pair_id": req.pair_id,
+            "prompt": pair["prompt"],
+            "rankings": req.rankings,
+            "slot_labels": req.slot_labels,
+            "per_label_rank": per_label,
+            "models_per_label": {c["label"]: c.get("model") for c in pair["candidates"]},
+        }
+        with EVAL_JUDGMENTS.open("a") as f:
+            f.write(json.dumps(rec) + "\n")
+        return {"ok": True, "per_label_rank": per_label, "models_per_label": rec["models_per_label"]}
+
+    # Legacy 2-way
     if req.picked not in ("left", "right", "unsure"):
         raise HTTPException(400, "picked must be left/right/unsure")
     if req.left_is not in ("base", "tuned"):
         raise HTTPException(400, "left_is must be base/tuned")
-    pair = next((p for p in _load_pairs() if p["id"] == req.pair_id), None)
-    if not pair:
-        raise HTTPException(404, f"pair {req.pair_id} not found")
     right_is = "tuned" if req.left_is == "base" else "base"
     picked_side: str | None = None
     correct: bool | None = None
@@ -435,7 +486,6 @@ async def blind_judge(req: BlindJudgeReq):
     elif req.picked == "right":
         picked_side = right_is
     if picked_side is not None:
-        # User was asked to pick the *tuned* one, so they're correct iff picked_side == "tuned"
         correct = picked_side == "tuned"
     rec = {
         "ts": time.time(),
@@ -452,7 +502,7 @@ async def blind_judge(req: BlindJudgeReq):
     }
     with EVAL_JUDGMENTS.open("a") as f:
         f.write(json.dumps(rec) + "\n")
-    return {"ok": True, "correct": correct, "left_is": req.left_is, "right_is": right_is}
+    return {"ok": True, "correct": correct, "left_is": req.left_is, "right_is": req.right_is if hasattr(req, 'right_is') else right_is}
 
 
 @app.get("/blind/stats")
@@ -460,7 +510,10 @@ async def blind_stats():
     if not EVAL_JUDGMENTS.exists():
         return {"total": 0, "decided": 0, "correct": 0, "accuracy": None}
     js = [json.loads(l) for l in EVAL_JUDGMENTS.read_text().splitlines() if l.strip()]
-    decided = [j for j in js if j.get("picked") in ("left", "right")]
+
+    # 2-way (legacy)
+    twos = [j for j in js if j.get("schema", "blind-judge-v1") == "blind-judge-v1"]
+    decided = [j for j in twos if j.get("picked") in ("left", "right")]
     correct = sum(1 for j in decided if j.get("correct"))
     n = len(decided)
     acc = correct / n if n else None
@@ -468,13 +521,41 @@ async def blind_stats():
     if n:
         se = (0.25 / n) ** 0.5
         z = (acc - 0.5) / se if se else 0
+
+    # N-way (multi)
+    multis = [j for j in js if j.get("schema") == "blind-judge-multi-v1"]
+    win_count: dict[str, int] = {}
+    rank_sum: dict[str, float] = {}
+    n_count: dict[str, int] = {}
+    for j in multis:
+        for label, rank in (j.get("per_label_rank") or {}).items():
+            n_count[label] = n_count.get(label, 0) + 1
+            rank_sum[label] = rank_sum.get(label, 0.0) + rank
+            if rank == 1:
+                win_count[label] = win_count.get(label, 0) + 1
+    multi_per_label = {
+        label: {
+            "rounds": n_count[label],
+            "wins": win_count.get(label, 0),
+            "win_rate": win_count.get(label, 0) / n_count[label] if n_count[label] else None,
+            "avg_rank": rank_sum[label] / n_count[label] if n_count[label] else None,
+        }
+        for label in n_count
+    }
+
     return {
         "total": len(js),
-        "decided": n,
-        "unsure": len(js) - n,
-        "correct": correct,
-        "accuracy": acc,
-        "z_vs_chance": z,
+        "two_way": {
+            "decided": n,
+            "unsure": len(twos) - n,
+            "correct": correct,
+            "accuracy": acc,
+            "z_vs_chance": z,
+        },
+        "multi_way": {
+            "rounds": len(multis),
+            "per_label": multi_per_label,
+        },
         "pairs_total": len(_load_pairs()),
     }
 

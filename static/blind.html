@@ -2,41 +2,57 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>blind eval — pick the tuned model</title>
+<title>blind eval</title>
 <style>
   :root { color-scheme: dark; }
   body { font-family: -apple-system, system-ui, sans-serif; background: #0e0e10; color: #e6e6e6; margin: 0; padding: 16px; }
   header { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
   h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 600; }
   .prompt { background: #1a1a1d; padding: 8px 12px; border-radius: 6px; font-size: 14px; flex: 1; min-width: 240px; }
-  .progress { font-size: 12px; opacity: 0.7; min-width: 120px; }
-  button { background: #2a2a30; color: #fff; border: 1px solid #444; padding: 10px 14px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+  .progress { font-size: 12px; opacity: 0.7; min-width: 100px; }
+  button { background: #2a2a30; color: #fff; border: 1px solid #444; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
   button:hover:not(:disabled) { background: #3a3a42; }
   button:disabled { opacity: 0.4; cursor: not-allowed; }
   button.primary { background: #2d5fa3; border-color: #4a7fc8; }
+  button.success { background: #1f5d3a; border-color: #2f8d54; }
   button.warn { background: #6a5b2a; border-color: #b9941f; }
 
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  .side { background: #16161a; border: 2px solid #2a2a30; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
-  .side h2 { font-size: 13px; font-weight: 600; opacity: 0.6; margin: 0; text-align: center; letter-spacing: 0.1em; }
-  .frame-wrap { background: #000; border-radius: 4px; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-  iframe { width: 100%; height: 100%; border: 0; display: block; }
-  .pick-btn { font-size: 15px; font-weight: 600; padding: 14px; }
+  /* dynamic grid: 2 / 3 / 4 columns */
+  #grid { display: grid; gap: 14px; }
+  #grid.n2 { grid-template-columns: 1fr 1fr; }
+  #grid.n3 { grid-template-columns: 1fr 1fr 1fr; }
+  #grid.n4 { grid-template-columns: 1fr 1fr; }  /* 2x2 for 4 */
+
+  .card { background: #16161a; border: 2px solid #2a2a30; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; min-width: 0; position: relative; }
+  .card.ranked { border-color: #4ade80; box-shadow: 0 0 0 2px #4ade8033; }
+  .card-head { display: flex; justify-content: space-between; align-items: center; font-size: 12px; opacity: 0.7; }
+  .frame-wrap { background: #000; border-radius: 4px; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; }
+  iframe { width: 100%; height: 100%; border: 0; display: block; pointer-events: none; }
+
+  .rank-badge { position: absolute; top: 12px; right: 12px; width: 38px; height: 38px; border-radius: 50%; display: none; align-items: center; justify-content: center; font-size: 18px; font-weight: 700; color: #fff; box-shadow: 0 2px 6px rgba(0,0,0,0.5); pointer-events: none; z-index: 5; }
+  .card.ranked .rank-badge { display: flex; }
+  .rank-badge.r1 { background: #4ade80; color: #022; border: 2px solid #80f0a0; }
+  .rank-badge.r2 { background: #4a90c8; border: 2px solid #80b8e0; }
+  .rank-badge.r3 { background: #6a6a78; border: 2px solid #8a8a98; }
+  .rank-badge.r4 { background: #c2440b; border: 2px solid #e07747; }
+
+  .rank-row { display: flex; gap: 6px; }
+  .rank-row button { flex: 1; padding: 8px 0; font-size: 13px; font-weight: 600; }
+  .rank-row button.active { background: #4ade80; color: #022; border-color: #80f0a0; }
+  .rank-row button.active.r2 { background: #4a90c8; color: #fff; border-color: #80b8e0; }
+  .rank-row button.active.r3 { background: #6a6a78; color: #fff; border-color: #8a8a98; }
+  .rank-row button.active.r4 { background: #c2440b; color: #fff; border-color: #e07747; }
+
   details { font-size: 11px; }
   details pre { background: #0a0a0c; padding: 8px; border-radius: 4px; overflow: auto; max-height: 180px; font-size: 11px; }
 
   .results { background: #16161a; border: 2px solid #2a2a30; border-radius: 8px; padding: 16px; margin-top: 16px; }
   .results h2 { margin: 0 0 8px 0; font-size: 16px; }
-  .stat-row { display: flex; gap: 16px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
-  .stat { background: #0a0a0c; padding: 8px 12px; border-radius: 6px; }
-  .stat b { font-size: 22px; display: block; }
-  .verdict { margin-top: 12px; padding: 10px 14px; border-radius: 6px; font-size: 14px; }
-  .verdict.good { background: #1f5d3a44; color: #b0f0c0; border: 1px solid #2f8d54; }
-  .verdict.meh { background: #6a5b2a33; color: #f0d8a0; border: 1px solid #b9941f; }
-  .verdict.bad { background: #6a2a2a44; color: #fbb; border: 1px solid #d97757; }
-
+  .results table { border-collapse: collapse; margin-top: 8px; font-variant-numeric: tabular-nums; }
+  .results th, .results td { padding: 6px 12px; border-bottom: 1px solid #2a2a30; text-align: left; }
+  .results th { font-size: 11px; opacity: 0.6; text-transform: uppercase; }
+  .results td.label { font-family: monospace; }
   #footer { margin-top: 16px; font-size: 12px; opacity: 0.5; }
-  .nav { display: flex; gap: 8px; }
   a { color: #4a7fc8; }
 </style>
 </head>
@@ -45,48 +61,26 @@
   <h1>blind eval</h1>
   <span class="progress" id="progress">—</span>
   <span class="prompt" id="prompt">load eval_pairs.jsonl first</span>
-  <div class="nav">
-    <a href="/">picker →</a>
-  </div>
+  <button id="submit" class="success" disabled>Submit ranks</button>
+  <button id="reset" disabled>Reset</button>
+  <button id="skip" class="warn" disabled>Skip</button>
+  <button id="stats">Show stats</button>
+  <a href="/">picker →</a>
 </header>
 
-<div class="grid" id="ab">
-  <div class="side">
-    <h2>LEFT</h2>
-    <div class="frame-wrap"><iframe sandbox="allow-scripts" id="left-frame"></iframe></div>
-    <button class="pick-btn primary" id="pick-left" disabled>Left is the tuned model</button>
-    <details><summary>code</summary><pre id="left-code"></pre></details>
-  </div>
-  <div class="side">
-    <h2>RIGHT</h2>
-    <div class="frame-wrap"><iframe sandbox="allow-scripts" id="right-frame"></iframe></div>
-    <button class="pick-btn primary" id="pick-right" disabled>Right is the tuned model</button>
-    <details><summary>code</summary><pre id="right-code"></pre></details>
-  </div>
-</div>
-
-<div style="margin-top: 12px; display: flex; gap: 8px; align-items: center;">
-  <button id="unsure" class="warn" disabled>Unsure</button>
-  <button id="next" disabled>Next</button>
-  <button id="stats">Show running stats</button>
-  <span id="msg" style="font-size:12px;opacity:0.7;"></span>
-</div>
-
-<div class="results" id="results" style="display:none;">
-  <h2 id="results-title">Session results</h2>
-  <div class="stat-row" id="stat-row"></div>
-  <div class="verdict" id="verdict"></div>
-</div>
-
-<div id="footer">Pick which canvas was rendered by the fine-tuned model. Truth hidden until session ends. Stored in <code>eval_judgments.jsonl</code>.</div>
+<div id="grid"></div>
+<div class="results" id="results" style="display:none;"></div>
+<div id="footer">Rank candidates 1 (best) to N (worst). Truth hidden until session ends. Logs to <code>eval_judgments.jsonl</code>.</div>
 
 <script>
-const $ = (s) => document.querySelector(s);
+const $ = (s, r=document) => r.querySelector(s);
 const SESSION_LEN = 10;
+const grid = $("#grid");
 
-let session = []; // pair_ids picked this session
-let sessionResults = []; // {pair_id, picked, correct, prompt}
-let current = null;
+let session = []; // pair_ids judged this session
+let sessionResults = []; // {pair_id, rankings, slot_labels, prompt, models}
+let current = null; // {schema, pair_id, prompt, slots:[{slot,code,_label}], n}
+let ranks = []; // ranks[slot] = 1..N or null
 
 function buildSrcdoc(code) {
   const codeJson = JSON.stringify(code || "// (empty)");
@@ -114,65 +108,145 @@ function buildSrcdoc(code) {
   <\/script></body></html>`;
 }
 
-function setMsg(t) { $("#msg").textContent = t; }
-
-function setProgress() {
-  $("#progress").textContent = `${session.length}/${SESSION_LEN}`;
-}
-
-function setButtons(enabled) {
-  $("#pick-left").disabled = !enabled;
-  $("#pick-right").disabled = !enabled;
-  $("#unsure").disabled = !enabled;
-}
-
-async function fetchNext() {
-  setButtons(false);
-  setMsg("loading...");
-  $("#next").disabled = true;
-  const skip = session.join(",");
-  const r = await fetch("/blind/next?skip=" + encodeURIComponent(skip));
-  const data = await r.json();
-  if (data.empty) {
-    setMsg(data.reason || "no pairs available");
-    $("#prompt").textContent = "(no more pairs)";
-    return null;
+function renderCards() {
+  grid.innerHTML = "";
+  grid.className = `n${current.n}`;
+  for (let slot = 0; slot < current.n; slot++) {
+    const c = current.slots[slot];
+    const card = document.createElement("div");
+    card.className = "card";
+    card.dataset.slot = String(slot);
+    card.innerHTML = `
+      <div class="card-head"><span>slot ${String.fromCharCode(65 + slot)}</span><span class="hidden-label" style="opacity:0">…</span></div>
+      <div class="frame-wrap"><iframe sandbox="allow-scripts" srcdoc=""></iframe><div class="rank-badge"></div></div>
+      <div class="rank-row"></div>
+      <details><summary>code</summary><pre></pre></details>
+    `;
+    card.querySelector("iframe").srcdoc = buildSrcdoc(c.code);
+    card.querySelector("details pre").textContent = c.code;
+    const row = card.querySelector(".rank-row");
+    for (let r = 1; r <= current.n; r++) {
+      const b = document.createElement("button");
+      b.textContent = r === 1 ? "1 best" : r === current.n ? `${r} worst` : String(r);
+      b.dataset.rank = String(r);
+      b.addEventListener("click", () => setRank(slot, r));
+      row.appendChild(b);
+    }
+    grid.appendChild(card);
   }
-  return data;
+  refreshRankUI();
+}
+
+function setRank(slot, rank) {
+  if (!current) return;
+  const prev = ranks[slot];
+  if (rank === prev) {
+    ranks[slot] = null;
+  } else {
+    // swap with whoever else holds rank
+    for (let j = 0; j < ranks.length; j++) {
+      if (j !== slot && ranks[j] === rank) ranks[j] = prev;
+    }
+    ranks[slot] = rank;
+  }
+  refreshRankUI();
+}
+
+function refreshRankUI() {
+  const cards = Array.from(grid.querySelectorAll(".card"));
+  cards.forEach((card, slot) => {
+    const r = ranks[slot];
+    card.classList.toggle("ranked", r != null);
+    const badge = card.querySelector(".rank-badge");
+    badge.className = "rank-badge" + (r ? ` r${Math.min(r, 4)}` : "");
+    badge.textContent = r || "";
+    card.querySelectorAll(".rank-row button").forEach(b => {
+      const br = parseInt(b.dataset.rank, 10);
+      b.classList.remove("active", "r2", "r3", "r4");
+      if (r === br) {
+        b.classList.add("active");
+        if (br === 2) b.classList.add("r2");
+        if (br === 3) b.classList.add("r3");
+        if (br === 4) b.classList.add("r4");
+      }
+    });
+  });
+  const allRanked = ranks.every(r => r != null);
+  $("#submit").disabled = !allRanked;
+  $("#reset").disabled = ranks.every(r => r == null);
+  $("#progress").textContent = `${session.length}/${SESSION_LEN} | ${ranks.filter(r => r != null).length}/${current ? current.n : 0} ranked`;
 }
 
 async function loadOne() {
   $("#results").style.display = "none";
-  current = await fetchNext();
-  if (!current) return;
+  const skip = session.join(",");
+  const r = await fetch("/blind/next?skip=" + encodeURIComponent(skip));
+  const data = await r.json();
+  if (data.empty) {
+    $("#prompt").textContent = "(queue empty: " + (data.reason || "") + ")";
+    grid.innerHTML = "";
+    $("#submit").disabled = true; $("#reset").disabled = true; $("#skip").disabled = true;
+    return;
+  }
+  // For now we only handle blind-multi-v1 in this UI. 2-way (blind-pair-v1) records
+  // still work but display as a 2-card N-way (label hidden, pick rank 1 vs 2).
+  if (data.schema === "blind-pair-v1") {
+    // Wrap legacy 2-way as N-way for display
+    current = {
+      schema: "blind-pair-v1",
+      pair_id: data.pair_id,
+      prompt: data.prompt,
+      n: 2,
+      slots: [
+        {slot: 0, code: data.left_code, _label: data._left_is},
+        {slot: 1, code: data.right_code, _label: data._right_is},
+      ],
+    };
+  } else {
+    current = data;
+  }
+  ranks = new Array(current.n).fill(null);
   $("#prompt").textContent = current.prompt;
-  $("#left-frame").srcdoc = buildSrcdoc(current.left_code);
-  $("#right-frame").srcdoc = buildSrcdoc(current.right_code);
-  $("#left-code").textContent = current.left_code;
-  $("#right-code").textContent = current.right_code;
-  setProgress();
-  setButtons(true);
-  setMsg(`pair ${session.length + 1}/${SESSION_LEN}`);
+  $("#skip").disabled = false;
+  renderCards();
 }
 
-async function judge(picked) {
-  if (!current) return;
-  setButtons(false);
-  const r = await fetch("/blind/judge", {
-    method: "POST", headers: {"content-type": "application/json"},
-    body: JSON.stringify({
+async function submit() {
+  if (!current || ranks.some(r => r == null)) return;
+  $("#submit").disabled = true;
+
+  let body;
+  if (current.schema === "blind-multi-v1") {
+    body = {
       pair_id: current.pair_id,
-      picked, left_is: current._left_is,
-    }),
+      rankings: ranks.slice(),
+      slot_labels: current.slots.map(s => s._label),
+    };
+  } else {
+    // 2-way legacy: convert ranks → picked side. Best (rank 1) is "tuned" if its label is "tuned"
+    const bestSlot = ranks.indexOf(1);
+    const picked = bestSlot === 0 ? "left" : "right";
+    body = {
+      pair_id: current.pair_id,
+      picked, left_is: current.slots[0]._label,
+    };
+  }
+
+  const r = await fetch("/blind/judge", {
+    method: "POST", headers: {"content-type":"application/json"},
+    body: JSON.stringify(body),
   });
-  if (!r.ok) { setMsg(`error: ${r.status}`); setButtons(true); return; }
+  if (!r.ok) { $("#progress").textContent = "submit failed"; $("#submit").disabled = false; return; }
   const res = await r.json();
   session.push(current.pair_id);
   sessionResults.push({
     pair_id: current.pair_id, prompt: current.prompt,
-    picked, correct: res.correct, left_is: res.left_is, right_is: res.right_is,
+    slot_labels: current.slots.map(s => s._label),
+    rankings: ranks.slice(),
+    models: current.slots.map(s => current.schema === "blind-multi-v1" ? null : null),
+    res,
   });
-  setProgress();
+
   if (session.length >= SESSION_LEN) {
     showResults();
   } else {
@@ -181,58 +255,78 @@ async function judge(picked) {
 }
 
 function showResults() {
-  setButtons(false);
-  $("#next").disabled = false;
-  const decided = sessionResults.filter(r => r.picked !== "unsure");
-  const correct = decided.filter(r => r.correct).length;
-  const acc = decided.length ? correct / decided.length : null;
-  // Binomial p-value via normal approx (n=10 should use exact, but z ok signal)
-  const n = decided.length;
-  const se = n ? Math.sqrt(0.25 / n) : 0;
-  const z = se ? (acc - 0.5) / se : 0;
   $("#results").style.display = "block";
-  $("#results-title").textContent = `Session results — ${session.length} pairs judged`;
-  $("#stat-row").innerHTML = `
-    <div class="stat"><b>${correct}/${decided.length}</b>correct</div>
-    <div class="stat"><b>${acc != null ? (acc*100).toFixed(0) + '%' : '—'}</b>accuracy</div>
-    <div class="stat"><b>${z >= 0 ? '+' : ''}${z.toFixed(2)}</b>z vs 50%</div>
-    <div class="stat"><b>${sessionResults.length - decided.length}</b>unsure</div>
-  `;
-  let verdict, cls;
-  if (decided.length < 5) {
-    verdict = "Need more decisions to read signal."; cls = "meh";
-  } else if (acc >= 0.8) {
-    verdict = "Strong signal — tune is clearly distinguishable. Tuning made a noticeable change."; cls = "good";
-  } else if (acc >= 0.65) {
-    verdict = "Moderate signal — you can tell, but not always. Tune has effect; consider more data or longer training."; cls = "good";
-  } else if (acc >= 0.55) {
-    verdict = "Weak signal — barely above chance. Tune may have only minor stylistic effect."; cls = "meh";
-  } else {
-    verdict = "No signal — indistinguishable from random. Tune likely had no/wrong effect, or you're not sensitive to the changes it made."; cls = "bad";
+  // Tally per label across the session
+  const tally = {}; // label -> {rank_sum, n, wins}
+  for (const r of sessionResults) {
+    const labels = r.slot_labels || [];
+    const ranks = r.rankings || [];
+    for (let i = 0; i < labels.length; i++) {
+      const L = labels[i];
+      if (!tally[L]) tally[L] = {rank_sum: 0, n: 0, wins: 0};
+      tally[L].rank_sum += ranks[i];
+      tally[L].n += 1;
+      if (ranks[i] === 1) tally[L].wins += 1;
+    }
   }
-  $("#verdict").textContent = verdict; $("#verdict").className = "verdict " + cls;
-  setMsg("session complete — click Next to start another");
+  let html = `<h2>Session results — ${sessionResults.length} rounds</h2>`;
+  html += `<table><thead><tr><th>label</th><th>wins</th><th>win rate</th><th>avg rank</th></tr></thead><tbody>`;
+  const rows = Object.entries(tally).sort((a,b) => a[1].rank_sum/a[1].n - b[1].rank_sum/b[1].n);
+  for (const [label, t] of rows) {
+    const wr = (t.wins / t.n * 100).toFixed(0);
+    const ar = (t.rank_sum / t.n).toFixed(2);
+    html += `<tr><td class="label">${label}</td><td>${t.wins}/${t.n}</td><td>${wr}%</td><td>${ar}</td></tr>`;
+  }
+  html += `</tbody></table>`;
+  html += `<div style="margin-top:10px"><button id="next-session" class="primary">Next session</button></div>`;
+  $("#results").innerHTML = html;
+  $("#next-session").addEventListener("click", () => {
+    session = []; sessionResults = []; loadOne();
+  });
+  $("#submit").disabled = true;
+  $("#reset").disabled = true;
+  $("#skip").disabled = true;
 }
 
-async function showRunningStats() {
+async function skip() {
+  if (!current) return;
+  await fetch("/blind/judge", {
+    method: "POST", headers: {"content-type":"application/json"},
+    body: JSON.stringify(current.schema === "blind-multi-v1"
+      ? {pair_id: current.pair_id, rankings: new Array(current.n).fill(null), slot_labels: current.slots.map(s=>s._label)}
+      : {pair_id: current.pair_id, picked: "unsure", left_is: current.slots[0]._label}),
+  });
+  session.push(current.pair_id);
+  if (session.length >= SESSION_LEN) showResults();
+  else loadOne();
+}
+
+async function showStats() {
   const r = await fetch("/blind/stats");
   const s = await r.json();
-  if (!s.decided) { setMsg("no decisions yet"); return; }
-  setMsg(`overall: ${s.correct}/${s.decided} = ${(s.accuracy*100).toFixed(0)}% (z=${s.z_vs_chance.toFixed(2)}); ${s.unsure} unsure; ${s.pairs_total} pairs total`);
+  let html = `<h2>Overall stats</h2>`;
+  if (s.two_way && s.two_way.decided) {
+    html += `<p>2-way: ${s.two_way.correct}/${s.two_way.decided} correct (${(s.two_way.accuracy*100).toFixed(0)}%, z=${s.two_way.z_vs_chance.toFixed(2)})</p>`;
+  }
+  if (s.multi_way && s.multi_way.rounds) {
+    html += `<h3>${s.multi_way.rounds} N-way rounds:</h3>`;
+    html += `<table><thead><tr><th>label</th><th>rounds</th><th>wins</th><th>win rate</th><th>avg rank</th></tr></thead><tbody>`;
+    const entries = Object.entries(s.multi_way.per_label).sort((a,b) => a[1].avg_rank - b[1].avg_rank);
+    for (const [label, t] of entries) {
+      const wr = t.win_rate != null ? (t.win_rate*100).toFixed(0) + "%" : "—";
+      const ar = t.avg_rank != null ? t.avg_rank.toFixed(2) : "—";
+      html += `<tr><td class="label">${label}</td><td>${t.rounds}</td><td>${t.wins}</td><td>${wr}</td><td>${ar}</td></tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+  $("#results").style.display = "block";
+  $("#results").innerHTML = html;
 }
 
-$("#pick-left").addEventListener("click", () => judge("left"));
-$("#pick-right").addEventListener("click", () => judge("right"));
-$("#unsure").addEventListener("click", () => judge("unsure"));
-$("#next").addEventListener("click", () => { session = []; sessionResults = []; loadOne(); });
-$("#stats").addEventListener("click", showRunningStats);
-
-document.addEventListener("keydown", (e) => {
-  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
-  if (e.key === "ArrowLeft" || e.key === "1") { if (!$("#pick-left").disabled) judge("left"); }
-  else if (e.key === "ArrowRight" || e.key === "2") { if (!$("#pick-right").disabled) judge("right"); }
-  else if (e.key === "u" || e.key === "0") { if (!$("#unsure").disabled) judge("unsure"); }
-});
+$("#submit").addEventListener("click", submit);
+$("#reset").addEventListener("click", () => { ranks = ranks.map(()=>null); refreshRankUI(); });
+$("#skip").addEventListener("click", skip);
+$("#stats").addEventListener("click", showStats);
 
 loadOne();
 </script>
