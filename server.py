@@ -39,32 +39,104 @@ MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "1200"))
 REQ_TIMEOUT = float(os.environ.get("REQ_TIMEOUT", "600"))
 HOST_TAG = os.environ.get("HOST_TAG", socket.gethostname())
 
-SYSTEM_PROMPT = """You output a JavaScript snippet that draws on an HTML canvas.
+_HARD_RULES = """Hard rules — follow EXACTLY:
+1. Write TOP-LEVEL STATEMENTS only. They execute immediately.
+2. Do NOT wrap your code in `function foo() { ... }`. If you define a function, also CALL it on the next line.
+3. Do NOT redeclare `ctx`, `W`, `H`, or `canvas`. Use them as-is.
+4. Do NOT output prose, markdown fences (```), <script> tags, HTML, or `document.getElementById`.
+5. No network, no external assets, no infinite loops.
+"""
 
-Your code is inserted directly inside this wrapper:
+_WRAPPER_NOTE = """Your code is inserted directly inside this wrapper:
     const ctx = canvas.getContext('2d');
     const W = 400, H = 400;
     try {
         // <-- YOUR CODE GOES HERE (executes immediately)
     } catch(e) { ... }
+"""
 
-Rules — follow EXACTLY:
-1. Write TOP-LEVEL STATEMENTS only. They execute immediately.
-2. Do NOT wrap your code in `function foo() { ... }`. If you define a function, also CALL it on the next line.
-3. Do NOT include placeholder comments like `// Your code here`. Write the actual drawing code.
-4. Do NOT redeclare `ctx`, `W`, `H`, or `canvas`. Use them as-is.
-5. Do NOT output prose, markdown fences (```), <script> tags, HTML, or `document.getElementById`.
-6. No network, no external assets, no infinite loops.
-7. Pixel-art style preferred: integer coords, blocky shapes, limited palette, fillRect.
+# 5 system-prompt variants for A/B comparison. Each batch round picks one via
+# SYSTEM_PROMPT_ID env var; pending records tag which variant produced them.
+SYSTEM_PROMPT_VARIANTS = {
+    "A": f"""You output a JavaScript snippet that draws on an HTML canvas.
 
-Example of CORRECT output for "a red square":
-    ctx.fillStyle = '#222';
-    ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = '#e44';
-    ctx.fillRect(160, 160, 80, 80);
+{_WRAPPER_NOTE}
+{_HARD_RULES}
+Style — composition-first pixel art:
+- Integer coordinates; blocky shapes via fillRect (sparingly: arc/ellipse).
+- Limited palette (~4-8 distinct colors). Pick a coherent palette for the subject.
+- ALWAYS paint a full background first (sky, ground, or solid mood color) — never leave the canvas blank or mostly-empty.
+- Compose deliberately: place the subject off-center where it helps; suggest foreground/midground/background with overlapping shapes.
+- Use shading: a darker tone for shadow sides, a lighter tone for highlights, to give depth.
+- Every prompt should produce a recognizable scene, not a single shape on a blank field.
 
 Now produce the code for the user's prompt. Output JavaScript only.
-"""
+""",
+
+    "B": f"""You output a JavaScript snippet that draws on an HTML canvas.
+
+{_WRAPPER_NOTE}
+{_HARD_RULES}
+Style — strict 8-bit retro pixel art on a 10-pixel grid:
+- Use ONLY ctx.fillRect and ctx.fillStyle. No arc, no ellipse, no curves, no lineTo, no paths.
+- ALL coordinates and sizes are multiples of 10. Snap to a 10-pixel grid (so the canvas is conceptually a 40×40 grid of 10×10 cells).
+- Pick exactly 6 colors at the top of the code as constants (e.g. C1='#...', C2='#...', through C6).
+- Always paint a background first using one of the constants — solid fill or two horizontal bands.
+- Build the subject from chunky 10×10, 20×20, 30×30, or 40×40 rectangles. No detail finer than 10 pixels.
+
+Now produce the code for the user's prompt. Output JavaScript only.
+""",
+
+    "C": f"""You output a JavaScript snippet that draws on an HTML canvas.
+
+{_WRAPPER_NOTE}
+{_HARD_RULES}
+Style — palette-and-mood-led pixel art:
+- BEFORE drawing, choose a 5-color palette suited to the subject's mood (warm sunset, cool moonlight, muted forest, vivid candy, somber rainy, dusty desert, etc).
+- Declare the palette at the top using semantic constant names: SKY, GROUND, ACCENT, SHADOW, HIGHLIGHT (or similar suited to the subject).
+- Reuse the palette consistently — don't introduce ad-hoc fillStyles mid-code.
+- The first thing drawn establishes the mood (sky/ground/atmosphere); then layer the subject on top.
+- Compose freely — fillRect preferred but use arc/ellipse where they serve the mood (sun, eyes, foliage).
+
+Now produce the code for the user's prompt. Output JavaScript only.
+""",
+
+    "D": f"""You output a JavaScript snippet that draws on an HTML canvas.
+
+{_WRAPPER_NOTE}
+{_HARD_RULES}
+Style — minimalist pixel art:
+- Maximum 4 colors total.
+- Maximum 30 draw calls. Do not exceed.
+- Lots of negative space — fill no more than 40% of the canvas with subject shapes.
+- Single subject, centered or rule-of-thirds.
+- Solid backgrounds only, no gradients, no banding, no texture.
+- No tiny details under 8 pixels.
+- The image should read clearly when squinting from across a room.
+
+Now produce the code for the user's prompt. Output JavaScript only.
+""",
+
+    "E": f"""You output a JavaScript snippet that draws on an HTML canvas.
+
+{_WRAPPER_NOTE}
+{_HARD_RULES}
+Style — rich, detailed maximalist pixel art:
+- Use 8-12 colors for variety. Define them as named constants up top.
+- Layer the scene: distant background, mid-ground (terrain/water/sky elements), foreground subject, plus small decorative details (stars, leaves, sparkles, texture).
+- Add at least 3 secondary elements beyond the main subject (e.g. for "a cat sitting", also draw a pillow, a window frame, ambient lighting, a small toy).
+- Use shading: shadow tones on subject undersides, highlights where light catches.
+- Aim for visual density — every region of the canvas should have something interesting.
+- Use both rectangles and curves freely (arc, ellipse, paths) to build texture.
+
+Now produce the code for the user's prompt. Output JavaScript only.
+""",
+}
+
+SYSTEM_PROMPT_ID = os.environ.get("SYSTEM_PROMPT_ID", "A")
+if SYSTEM_PROMPT_ID not in SYSTEM_PROMPT_VARIANTS:
+    raise SystemExit(f"unknown SYSTEM_PROMPT_ID={SYSTEM_PROMPT_ID!r}, must be one of {list(SYSTEM_PROMPT_VARIANTS)}")
+SYSTEM_PROMPT = SYSTEM_PROMPT_VARIANTS[SYSTEM_PROMPT_ID]
 
 app = FastAPI()
 
@@ -100,6 +172,9 @@ class GenOneReq(BaseModel):
     prompt: str
     index: int | None = None  # legacy: maps into TEMPS[index]
     temp: float | None = None  # preferred: explicit temperature
+    top_p: float | None = None
+    min_p: float | None = None
+    max_tokens: int | None = None
 
 
 class PickReq(BaseModel):
@@ -165,17 +240,28 @@ def _sanitize(code: str) -> str:
     return "\n".join(kept).strip()
 
 
-async def _one_completion(client: httpx.AsyncClient, prompt: str, temperature: float) -> str:
-    payload = {
+async def _one_completion(
+    client: httpx.AsyncClient,
+    prompt: str,
+    temperature: float,
+    top_p: float | None = None,
+    min_p: float | None = None,
+    max_tokens: int | None = None,
+) -> str:
+    payload: dict = {
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
         "temperature": temperature,
-        "max_tokens": MAX_TOKENS,
+        "max_tokens": max_tokens if max_tokens is not None else MAX_TOKENS,
         "stream": False,
-        "cache_prompt": True,  # llama-server: reuse KV for matching prefix (the system prompt)
+        "cache_prompt": True,
     }
+    if top_p is not None:
+        payload["top_p"] = top_p
+    if min_p is not None:
+        payload["min_p"] = min_p
     r = await client.post(f"{LLAMA_URL}/v1/chat/completions", json=payload, timeout=REQ_TIMEOUT)
     r.raise_for_status()
     data = r.json()
@@ -198,15 +284,29 @@ async def generate_one(req: GenOneReq):
         raise HTTPException(400, "must provide either 'temp' or 'index'")
     async with httpx.AsyncClient() as client:
         try:
-            code = await _one_completion(client, req.prompt, temp)
+            code = await _one_completion(
+                client, req.prompt, temp,
+                top_p=req.top_p, min_p=req.min_p, max_tokens=req.max_tokens,
+            )
         except Exception as e:
             return {"index": req.index, "temp": temp, "code": "", "error": f"{type(e).__name__}: {e}"}
-    return {"index": req.index, "temp": temp, "code": code, "suspect": not _has_draw_calls(code)}
+    return {
+        "index": req.index, "temp": temp, "code": code,
+        "top_p": req.top_p, "min_p": req.min_p, "max_tokens": req.max_tokens,
+        "system_prompt_id": SYSTEM_PROMPT_ID,
+        "suspect": not _has_draw_calls(code),
+    }
 
 
 @app.get("/config")
 async def config():
-    return {"n": N_CANDIDATES, "temps": _temps_for(N_CANDIDATES), "temp_pool": TEMP_POOL}
+    return {
+        "n": N_CANDIDATES,
+        "temps": _temps_for(N_CANDIDATES),
+        "temp_pool": TEMP_POOL,
+        "system_prompt_id": SYSTEM_PROMPT_ID,
+        "system_prompt_variants": list(SYSTEM_PROMPT_VARIANTS.keys()),
+    }
 
 
 @app.post("/generate")

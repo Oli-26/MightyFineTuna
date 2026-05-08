@@ -57,12 +57,25 @@ def already_done_prompts(pending: Path) -> set[str]:
 
 
 DEFAULT_TEMP_POOL = [0.3, 0.5, 0.7, 0.9, 1.1, 1.3]
+TEMP_TIERS = [(0.3, 0.5), (0.7, 0.9), (1.1, 1.3)]  # low / mid / high
+TOP_P_POOL = [0.7, 0.85, 0.95, 1.0]
+MIN_P_POOL = [0.0, 0.02, 0.05, 0.1]
+MAX_TOKENS_POOL = [800, 1200, 1600]
 
 
-async def gen_one(client: httpx.AsyncClient, url: str, prompt: str, temp: float) -> dict:
+def _sample_sampler(temp: float) -> dict:
+    return {
+        "temp": temp,
+        "top_p": random.choice(TOP_P_POOL),
+        "min_p": random.choice(MIN_P_POOL),
+        "max_tokens": random.choice(MAX_TOKENS_POOL),
+    }
+
+
+async def gen_one(client: httpx.AsyncClient, url: str, prompt: str, sampler: dict) -> dict:
     r = await client.post(
         f"{url}/generate_one",
-        json={"prompt": prompt, "temp": temp},
+        json={"prompt": prompt, **sampler},
         timeout=900.0,
     )
     r.raise_for_status()
@@ -82,10 +95,15 @@ async def fetch_temp_pool(client: httpx.AsyncClient, url: str) -> list[float]:
 
 
 async def gen_batch(client: httpx.AsyncClient, url: str, prompt: str, n: int, pool: list[float]) -> list[dict]:
-    # Sample n distinct temps from pool (random per prompt) → wider variance per
-    # round than the old fixed [0.4, 0.75, 1.05]. Slot ↔ temp randomized too.
-    chosen = random.sample(pool, k=min(n, len(pool)))
-    tasks = [gen_one(client, url, prompt, chosen[slot]) for slot in range(n)]
+    # One temp from each tier (low/mid/high) when n=3, else random sample from pool.
+    # Each candidate also gets random top_p / min_p / max_tokens for richer variance.
+    if n == 3:
+        temps = [random.uniform(*tier) for tier in TEMP_TIERS]
+        random.shuffle(temps)  # decouple slot index from temp tier
+    else:
+        temps = random.sample(pool, k=min(n, len(pool)))
+    samplers = [_sample_sampler(round(t, 3)) for t in temps]
+    tasks = [gen_one(client, url, prompt, samplers[slot]) for slot in range(n)]
     return await asyncio.gather(*tasks, return_exceptions=True)
 
 
@@ -145,20 +163,30 @@ async def main() -> int:
 
             candidates: list[str] = []
             temps: list[float | None] = []
+            top_ps: list[float | None] = []
+            min_ps: list[float | None] = []
+            max_tokens_list: list[int | None] = []
             suspect: list[bool] = []
             errored: list[bool] = []
             for r in results:
                 if isinstance(r, Exception):
                     candidates.append("")
                     temps.append(None)
+                    top_ps.append(None)
+                    min_ps.append(None)
+                    max_tokens_list.append(None)
                     suspect.append(False)
                     errored.append(True)
                 else:
                     candidates.append(r.get("code", ""))
                     temps.append(r.get("temp"))
+                    top_ps.append(r.get("top_p"))
+                    min_ps.append(r.get("min_p"))
+                    max_tokens_list.append(r.get("max_tokens"))
                     suspect.append(bool(r.get("suspect")))
                     errored.append(bool(r.get("error")) or not r.get("code"))
 
+            sp_ids = [r.get("system_prompt_id") if isinstance(r, dict) else None for r in results]
             rec = {
                 "id": str(uuid.uuid4()),
                 "ts": time.time(),
@@ -167,6 +195,10 @@ async def main() -> int:
                 "prompt": prompt,
                 "candidates": candidates,
                 "temps": temps,
+                "top_ps": top_ps,
+                "min_ps": min_ps,
+                "max_tokens": max_tokens_list,
+                "system_prompt_id": next((s for s in sp_ids if s is not None), None),
                 "suspect": suspect,
                 "errored": errored,
             }
