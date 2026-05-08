@@ -26,6 +26,8 @@ STATIC = ROOT / "static"
 PREFS = ROOT / "prefs.jsonl"
 PENDING = ROOT / "pending.jsonl"
 REVIEWED = ROOT / "reviewed.txt"  # one pending id per line
+EVAL_PAIRS = ROOT / "eval_pairs.jsonl"
+EVAL_JUDGMENTS = ROOT / "eval_judgments.jsonl"
 
 LLAMA_URL = os.environ.get("LLAMA_URL", "http://127.0.0.1:8080")
 N_CANDIDATES = int(os.environ.get("N_CANDIDATES", "3"))
@@ -339,6 +341,133 @@ async def health():
 @app.get("/")
 async def index():
     return FileResponse(STATIC / "index.html")
+
+
+@app.get("/blind")
+async def blind_index():
+    return FileResponse(STATIC / "blind.html")
+
+
+# ---- Blind A/B eval ----
+
+import secrets
+
+
+def _load_pairs() -> list[dict]:
+    if not EVAL_PAIRS.exists():
+        return []
+    return [json.loads(l) for l in EVAL_PAIRS.read_text().splitlines() if l.strip()]
+
+
+def _judged_pair_ids() -> set[str]:
+    if not EVAL_JUDGMENTS.exists():
+        return set()
+    return {
+        json.loads(l).get("pair_id")
+        for l in EVAL_JUDGMENTS.read_text().splitlines()
+        if l.strip()
+    }
+
+
+@app.get("/blind/next")
+async def blind_next(skip: str = ""):
+    """Return one unjudged pair, with random L/R assignment.
+    Client sends back the picked side + the assignment so we can score it.
+    `skip` (comma-separated pair_ids) lets the client avoid pairs already shown
+    in the current session (without committing a judgment yet).
+    """
+    pairs = _load_pairs()
+    if not pairs:
+        return {"empty": True, "reason": "no eval_pairs.jsonl yet — run blind_eval.py to populate"}
+    judged = _judged_pair_ids()
+    skipped = set(s for s in skip.split(",") if s)
+    remaining = [p for p in pairs if p["id"] not in judged and p["id"] not in skipped]
+    if not remaining:
+        return {"empty": True, "total": len(pairs), "reason": "all pairs judged or skipped"}
+    # pick first remaining (deterministic order); client decides session length
+    pair = remaining[0]
+    # random L/R assignment + ephemeral truth token (we don't trust the client)
+    left_is = "base" if secrets.randbelow(2) == 0 else "tuned"
+    right_is = "tuned" if left_is == "base" else "base"
+    return {
+        "empty": False,
+        "pair_id": pair["id"],
+        "prompt": pair["prompt"],
+        "left_code":  pair[left_is]["code"],
+        "right_code": pair[right_is]["code"],
+        "_left_is": left_is,    # client echoes back; we still verify against pair store
+        "_right_is": right_is,
+        "remaining": len(remaining),
+        "total": len(pairs),
+        "judged": len(judged),
+    }
+
+
+class BlindJudgeReq(BaseModel):
+    pair_id: str
+    picked: str          # "left" | "right" | "unsure"
+    left_is: str         # echoed: "base" or "tuned"
+
+
+@app.post("/blind/judge")
+async def blind_judge(req: BlindJudgeReq):
+    if req.picked not in ("left", "right", "unsure"):
+        raise HTTPException(400, "picked must be left/right/unsure")
+    if req.left_is not in ("base", "tuned"):
+        raise HTTPException(400, "left_is must be base/tuned")
+    pair = next((p for p in _load_pairs() if p["id"] == req.pair_id), None)
+    if not pair:
+        raise HTTPException(404, f"pair {req.pair_id} not found")
+    right_is = "tuned" if req.left_is == "base" else "base"
+    picked_side: str | None = None
+    correct: bool | None = None
+    if req.picked == "left":
+        picked_side = req.left_is
+    elif req.picked == "right":
+        picked_side = right_is
+    if picked_side is not None:
+        # User was asked to pick the *tuned* one, so they're correct iff picked_side == "tuned"
+        correct = picked_side == "tuned"
+    rec = {
+        "ts": time.time(),
+        "schema": "blind-judge-v1",
+        "pair_id": req.pair_id,
+        "prompt": pair["prompt"],
+        "left_is": req.left_is,
+        "right_is": right_is,
+        "picked": req.picked,
+        "picked_side": picked_side,
+        "correct": correct,
+        "base_model": pair.get("base", {}).get("model"),
+        "tuned_model": pair.get("tuned", {}).get("model"),
+    }
+    with EVAL_JUDGMENTS.open("a") as f:
+        f.write(json.dumps(rec) + "\n")
+    return {"ok": True, "correct": correct, "left_is": req.left_is, "right_is": right_is}
+
+
+@app.get("/blind/stats")
+async def blind_stats():
+    if not EVAL_JUDGMENTS.exists():
+        return {"total": 0, "decided": 0, "correct": 0, "accuracy": None}
+    js = [json.loads(l) for l in EVAL_JUDGMENTS.read_text().splitlines() if l.strip()]
+    decided = [j for j in js if j.get("picked") in ("left", "right")]
+    correct = sum(1 for j in decided if j.get("correct"))
+    n = len(decided)
+    acc = correct / n if n else None
+    z = None
+    if n:
+        se = (0.25 / n) ** 0.5
+        z = (acc - 0.5) / se if se else 0
+    return {
+        "total": len(js),
+        "decided": n,
+        "unsure": len(js) - n,
+        "correct": correct,
+        "accuracy": acc,
+        "z_vs_chance": z,
+        "pairs_total": len(_load_pairs()),
+    }
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

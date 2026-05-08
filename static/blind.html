@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>blind eval — pick the tuned model</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: #0e0e10; color: #e6e6e6; margin: 0; padding: 16px; }
+  header { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+  h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 600; }
+  .prompt { background: #1a1a1d; padding: 8px 12px; border-radius: 6px; font-size: 14px; flex: 1; min-width: 240px; }
+  .progress { font-size: 12px; opacity: 0.7; min-width: 120px; }
+  button { background: #2a2a30; color: #fff; border: 1px solid #444; padding: 10px 14px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+  button:hover:not(:disabled) { background: #3a3a42; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.primary { background: #2d5fa3; border-color: #4a7fc8; }
+  button.warn { background: #6a5b2a; border-color: #b9941f; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .side { background: #16161a; border: 2px solid #2a2a30; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .side h2 { font-size: 13px; font-weight: 600; opacity: 0.6; margin: 0; text-align: center; letter-spacing: 0.1em; }
+  .frame-wrap { background: #000; border-radius: 4px; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  iframe { width: 100%; height: 100%; border: 0; display: block; }
+  .pick-btn { font-size: 15px; font-weight: 600; padding: 14px; }
+  details { font-size: 11px; }
+  details pre { background: #0a0a0c; padding: 8px; border-radius: 4px; overflow: auto; max-height: 180px; font-size: 11px; }
+
+  .results { background: #16161a; border: 2px solid #2a2a30; border-radius: 8px; padding: 16px; margin-top: 16px; }
+  .results h2 { margin: 0 0 8px 0; font-size: 16px; }
+  .stat-row { display: flex; gap: 16px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+  .stat { background: #0a0a0c; padding: 8px 12px; border-radius: 6px; }
+  .stat b { font-size: 22px; display: block; }
+  .verdict { margin-top: 12px; padding: 10px 14px; border-radius: 6px; font-size: 14px; }
+  .verdict.good { background: #1f5d3a44; color: #b0f0c0; border: 1px solid #2f8d54; }
+  .verdict.meh { background: #6a5b2a33; color: #f0d8a0; border: 1px solid #b9941f; }
+  .verdict.bad { background: #6a2a2a44; color: #fbb; border: 1px solid #d97757; }
+
+  #footer { margin-top: 16px; font-size: 12px; opacity: 0.5; }
+  .nav { display: flex; gap: 8px; }
+  a { color: #4a7fc8; }
+</style>
+</head>
+<body>
+<header>
+  <h1>blind eval</h1>
+  <span class="progress" id="progress">—</span>
+  <span class="prompt" id="prompt">load eval_pairs.jsonl first</span>
+  <div class="nav">
+    <a href="/">picker →</a>
+  </div>
+</header>
+
+<div class="grid" id="ab">
+  <div class="side">
+    <h2>LEFT</h2>
+    <div class="frame-wrap"><iframe sandbox="allow-scripts" id="left-frame"></iframe></div>
+    <button class="pick-btn primary" id="pick-left" disabled>Left is the tuned model</button>
+    <details><summary>code</summary><pre id="left-code"></pre></details>
+  </div>
+  <div class="side">
+    <h2>RIGHT</h2>
+    <div class="frame-wrap"><iframe sandbox="allow-scripts" id="right-frame"></iframe></div>
+    <button class="pick-btn primary" id="pick-right" disabled>Right is the tuned model</button>
+    <details><summary>code</summary><pre id="right-code"></pre></details>
+  </div>
+</div>
+
+<div style="margin-top: 12px; display: flex; gap: 8px; align-items: center;">
+  <button id="unsure" class="warn" disabled>Unsure</button>
+  <button id="next" disabled>Next</button>
+  <button id="stats">Show running stats</button>
+  <span id="msg" style="font-size:12px;opacity:0.7;"></span>
+</div>
+
+<div class="results" id="results" style="display:none;">
+  <h2 id="results-title">Session results</h2>
+  <div class="stat-row" id="stat-row"></div>
+  <div class="verdict" id="verdict"></div>
+</div>
+
+<div id="footer">Pick which canvas was rendered by the fine-tuned model. Truth hidden until session ends. Stored in <code>eval_judgments.jsonl</code>.</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const SESSION_LEN = 10;
+
+let session = []; // pair_ids picked this session
+let sessionResults = []; // {pair_id, picked, correct, prompt}
+let current = null;
+
+function buildSrcdoc(code) {
+  const codeJson = JSON.stringify(code || "// (empty)");
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+    html,body{margin:0;background:#000;height:100%;width:100%;overflow:hidden;display:flex;align-items:center;justify-content:center}
+    canvas{image-rendering:pixelated;image-rendering:crisp-edges;background:#111;max-width:100%;max-height:100%;display:block}
+  </style></head><body>
+  <canvas id="c" width="400" height="400"></canvas>
+  <script>
+  (function(){
+    const c=document.getElementById('c');
+    const ctx=c.getContext('2d');
+    const W=400,H=400;
+    ctx.imageSmoothingEnabled=false;
+    const __code=${codeJson};
+    try {
+      new Function('ctx','W','H','canvas',__code)(ctx,W,H,c);
+    } catch(e) {
+      ctx.fillStyle='#400';ctx.fillRect(0,0,W,H);
+      ctx.fillStyle='#fbb';ctx.font='12px monospace';
+      const msg=(e && e.name? e.name+': ':'')+String(e && e.message || e);
+      let y=20; for(const line of msg.match(/.{1,40}/g)||[msg]){ ctx.fillText(line,10,y); y+=14; }
+    }
+  })();
+  <\/script></body></html>`;
+}
+
+function setMsg(t) { $("#msg").textContent = t; }
+
+function setProgress() {
+  $("#progress").textContent = `${session.length}/${SESSION_LEN}`;
+}
+
+function setButtons(enabled) {
+  $("#pick-left").disabled = !enabled;
+  $("#pick-right").disabled = !enabled;
+  $("#unsure").disabled = !enabled;
+}
+
+async function fetchNext() {
+  setButtons(false);
+  setMsg("loading...");
+  $("#next").disabled = true;
+  const skip = session.join(",");
+  const r = await fetch("/blind/next?skip=" + encodeURIComponent(skip));
+  const data = await r.json();
+  if (data.empty) {
+    setMsg(data.reason || "no pairs available");
+    $("#prompt").textContent = "(no more pairs)";
+    return null;
+  }
+  return data;
+}
+
+async function loadOne() {
+  $("#results").style.display = "none";
+  current = await fetchNext();
+  if (!current) return;
+  $("#prompt").textContent = current.prompt;
+  $("#left-frame").srcdoc = buildSrcdoc(current.left_code);
+  $("#right-frame").srcdoc = buildSrcdoc(current.right_code);
+  $("#left-code").textContent = current.left_code;
+  $("#right-code").textContent = current.right_code;
+  setProgress();
+  setButtons(true);
+  setMsg(`pair ${session.length + 1}/${SESSION_LEN}`);
+}
+
+async function judge(picked) {
+  if (!current) return;
+  setButtons(false);
+  const r = await fetch("/blind/judge", {
+    method: "POST", headers: {"content-type": "application/json"},
+    body: JSON.stringify({
+      pair_id: current.pair_id,
+      picked, left_is: current._left_is,
+    }),
+  });
+  if (!r.ok) { setMsg(`error: ${r.status}`); setButtons(true); return; }
+  const res = await r.json();
+  session.push(current.pair_id);
+  sessionResults.push({
+    pair_id: current.pair_id, prompt: current.prompt,
+    picked, correct: res.correct, left_is: res.left_is, right_is: res.right_is,
+  });
+  setProgress();
+  if (session.length >= SESSION_LEN) {
+    showResults();
+  } else {
+    loadOne();
+  }
+}
+
+function showResults() {
+  setButtons(false);
+  $("#next").disabled = false;
+  const decided = sessionResults.filter(r => r.picked !== "unsure");
+  const correct = decided.filter(r => r.correct).length;
+  const acc = decided.length ? correct / decided.length : null;
+  // Binomial p-value via normal approx (n=10 should use exact, but z ok signal)
+  const n = decided.length;
+  const se = n ? Math.sqrt(0.25 / n) : 0;
+  const z = se ? (acc - 0.5) / se : 0;
+  $("#results").style.display = "block";
+  $("#results-title").textContent = `Session results — ${session.length} pairs judged`;
+  $("#stat-row").innerHTML = `
+    <div class="stat"><b>${correct}/${decided.length}</b>correct</div>
+    <div class="stat"><b>${acc != null ? (acc*100).toFixed(0) + '%' : '—'}</b>accuracy</div>
+    <div class="stat"><b>${z >= 0 ? '+' : ''}${z.toFixed(2)}</b>z vs 50%</div>
+    <div class="stat"><b>${sessionResults.length - decided.length}</b>unsure</div>
+  `;
+  let verdict, cls;
+  if (decided.length < 5) {
+    verdict = "Need more decisions to read signal."; cls = "meh";
+  } else if (acc >= 0.8) {
+    verdict = "Strong signal — tune is clearly distinguishable. Tuning made a noticeable change."; cls = "good";
+  } else if (acc >= 0.65) {
+    verdict = "Moderate signal — you can tell, but not always. Tune has effect; consider more data or longer training."; cls = "good";
+  } else if (acc >= 0.55) {
+    verdict = "Weak signal — barely above chance. Tune may have only minor stylistic effect."; cls = "meh";
+  } else {
+    verdict = "No signal — indistinguishable from random. Tune likely had no/wrong effect, or you're not sensitive to the changes it made."; cls = "bad";
+  }
+  $("#verdict").textContent = verdict; $("#verdict").className = "verdict " + cls;
+  setMsg("session complete — click Next to start another");
+}
+
+async function showRunningStats() {
+  const r = await fetch("/blind/stats");
+  const s = await r.json();
+  if (!s.decided) { setMsg("no decisions yet"); return; }
+  setMsg(`overall: ${s.correct}/${s.decided} = ${(s.accuracy*100).toFixed(0)}% (z=${s.z_vs_chance.toFixed(2)}); ${s.unsure} unsure; ${s.pairs_total} pairs total`);
+}
+
+$("#pick-left").addEventListener("click", () => judge("left"));
+$("#pick-right").addEventListener("click", () => judge("right"));
+$("#unsure").addEventListener("click", () => judge("unsure"));
+$("#next").addEventListener("click", () => { session = []; sessionResults = []; loadOne(); });
+$("#stats").addEventListener("click", showRunningStats);
+
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+  if (e.key === "ArrowLeft" || e.key === "1") { if (!$("#pick-left").disabled) judge("left"); }
+  else if (e.key === "ArrowRight" || e.key === "2") { if (!$("#pick-right").disabled) judge("right"); }
+  else if (e.key === "u" || e.key === "0") { if (!$("#unsure").disabled) judge("unsure"); }
+});
+
+loadOne();
+</script>
+</body>
+</html>

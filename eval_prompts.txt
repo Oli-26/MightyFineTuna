@@ -1,0 +1,34 @@
+# Blind eval prompts — kept distinct from prompts.txt so we test generalization,
+# not training-set memorization.
+
+# animals (different from prompts.txt)
+a curious meerkat standing tall
+a friendly octopus
+a tiny mouse holding cheese
+a parrot with green feathers
+
+# characters
+a samurai with two swords
+a magical fairy with wings
+a barbarian with axe
+a yoga instructor in pose
+
+# objects
+a pocket watch
+a stack of pancakes
+a vintage radio
+a treasure-filled gold coin pile
+
+# nature
+a single rose with thorns
+a frozen waterfall
+a cherry blossom branch
+a tornado tearing through plains
+
+# food
+a steaming bowl of soup
+a colorful fruit salad
+
+# composition
+a witch flying past the moon
+a dog wagging tail in front of doghouse

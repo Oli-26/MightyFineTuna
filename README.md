@@ -104,6 +104,28 @@ Dedup is on `(ts, prompt, sha1(candidates))`.
 
 `reviewed.txt` — one pending `id` per line, tracks what's been rated.
 
+## Blind A/B eval (after you've fine-tuned)
+
+Once you have a tuned student, run a blind eval to verify the tune actually changed model behavior in a way you can detect.
+
+1. Boot the **base** model in llama-server, generate one side:
+   ```bash
+   ./blind_eval.py --side base --url http://127.0.0.1:8080 --prompts eval_prompts.txt
+   ```
+2. Stop, boot the **tuned** model in llama-server, generate the other side:
+   ```bash
+   ./blind_eval.py --side tuned --url http://127.0.0.1:8080 --prompts eval_prompts.txt
+   ```
+3. Pair them up:
+   ```bash
+   ./blind_eval.py --pair side_base.jsonl side_tuned.jsonl
+   ```
+4. Open <http://127.0.0.1:8000/blind> — you'll see two canvases side by side per prompt and pick which is the tuned model. Truth is hidden until session end (10 pairs). Reveal shows accuracy + a verdict on signal strength.
+
+`./blind_eval.py --stats` reports overall accuracy across all sessions.
+
+`eval_prompts.txt` is intentionally **disjoint** from `prompts.txt` so you're testing generalization, not memorization of the training distribution.
+
 ## Notes
 
 - Model file paths are **not** committed. Set `MODEL` env var or edit `run.sh`.
