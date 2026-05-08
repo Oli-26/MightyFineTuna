@@ -76,3 +76,81 @@ a cat sleeping by a window
 a tiny house in a snowy field
 a ghost in a haunted graveyard
 a treasure map on parchment
+
+# === second batch (60 fresh) ===
+
+# more animals
+a black-and-white cow chewing grass
+a chameleon on a branch
+a flamingo standing on one leg
+a porcupine with bristly quills
+a butterfly with patterned wings
+a snail with a swirly shell
+a wolf howling at the moon
+a bee hovering over a flower
+a starfish on the seafloor
+a giraffe reaching tree leaves
+
+# more characters
+a samurai in red armor
+a wizard apprentice with a tall hat
+a deep-sea diver with helmet
+a circus clown holding balloons
+a witch stirring a cauldron
+a mountain climber with rope
+a scientist with bubbling beaker
+a barista pouring coffee
+
+# more objects
+a old gramophone with horn
+a stack of vinyl records
+a glowing lantern at night
+a chess set mid-game
+a wooden rocking chair
+a typewriter on a desk
+a fishing rod with a fish biting
+a music box open with dancer
+a magnifying glass over text
+a paint palette with brushes
+
+# more nature
+a mushroom forest with glowing caps
+a sunflower facing the sun
+a koi pond with stepping stones
+a snowy pine tree
+a beach at sunset with shells
+a vine with grapes
+a meadow with wildflowers
+a frozen lake reflecting clouds
+
+# more food
+a sliced birthday cake
+a plate of spaghetti
+a basket of bread loaves
+a strawberry milkshake
+a sushi platter
+a stack of pancakes with syrup
+
+# more vehicles
+a yellow taxi cab
+a vintage motorcycle
+a tractor in a wheat field
+a tugboat in a harbor
+a UFO above a farmhouse
+
+# more compositions
+a wizard reading a spellbook by candlelight
+a fox curled up in a den
+a small village at dusk
+a dolphin leaping over waves
+a robot tending a tiny garden
+a child flying a kite
+a treehouse in a giant tree
+a market stall with fruit baskets
+
+# abstract / patterns
+a kaleidoscope pattern
+concentric circles in pastel colors
+a checkerboard with one missing square
+a rainbow gradient with stars
+a mosaic of colorful triangles
