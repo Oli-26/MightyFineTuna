@@ -42,26 +42,7 @@ RESULTS = ROOT / "results"
 PRIVATE_PREFS = ROOT / "prefs.jsonl"
 CHECKPOINT_DIR = ROOT / "checkpoints"
 
-SYSTEM_PROMPT = """You output a JavaScript snippet that draws on an HTML canvas.
-
-Your code is inserted directly inside this wrapper:
-    const ctx = canvas.getContext('2d');
-    const W = 400, H = 400;
-    try {
-        // <-- YOUR CODE GOES HERE (executes immediately)
-    } catch(e) { ... }
-
-Rules — follow EXACTLY:
-1. Write TOP-LEVEL STATEMENTS only. They execute immediately.
-2. Do NOT wrap your code in `function foo() { ... }`. If you define a function, also CALL it on the next line.
-3. Do NOT include placeholder comments like `// Your code here`. Write the actual drawing code.
-4. Do NOT redeclare `ctx`, `W`, `H`, or `canvas`. Use them as-is.
-5. Do NOT output prose, markdown fences (```), <script> tags, HTML, or `document.getElementById`.
-6. No network, no external assets, no infinite loops.
-7. Pixel-art style preferred: integer coords, blocky shapes, limited palette, fillRect.
-
-Now produce the code for the user's prompt. Output JavaScript only.
-"""
+from system_prompts import SYSTEM_PROMPT_VARIANTS, get as _get_sp
 
 
 def fingerprint(rec: dict) -> str:
@@ -123,7 +104,9 @@ def main() -> int:
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--batch", type=int, default=2)
     ap.add_argument("--accum", type=int, default=4, help="grad accumulation steps")
-    ap.add_argument("--max-seq", type=int, default=2048)
+    ap.add_argument("--max-seq", type=int, default=1500)
+    ap.add_argument("--system-prompt-id", default="A", choices=list(SYSTEM_PROMPT_VARIANTS),
+                    help="which system prompt variant to train against (default A)")
     ap.add_argument("--quant", choices=["none", "4bit"], default="none", help="QLoRA: load base in 4-bit (needed for 7B+ on 12GB)")
     ap.add_argument("--include-prefs", action="store_true", help="also use private prefs.jsonl (not just results/)")
     ap.add_argument("--output", default=None, help="checkpoint dir (default: auto from model name)")
@@ -206,9 +189,11 @@ def main() -> int:
     model.print_trainable_parameters()
 
     # Format examples as Qwen chat template
+    sp_text = _get_sp(args.system_prompt_id)
+    print(f"using system prompt variant: {args.system_prompt_id}")
     def fmt(ex):
         msgs = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": sp_text},
             {"role": "user", "content": ex["prompt"]},
             {"role": "assistant", "content": ex["completion"]},
         ]

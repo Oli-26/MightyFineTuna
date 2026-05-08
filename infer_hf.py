@@ -6,6 +6,7 @@
 #   "transformers>=4.46",
 #   "peft>=0.13",
 #   "accelerate>=1.0",
+#   "bitsandbytes>=0.44",
 # ]
 # ///
 """
@@ -29,26 +30,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent
 
-SYSTEM_PROMPT = """You output a JavaScript snippet that draws on an HTML canvas.
-
-Your code is inserted directly inside this wrapper:
-    const ctx = canvas.getContext('2d');
-    const W = 400, H = 400;
-    try {
-        // <-- YOUR CODE GOES HERE (executes immediately)
-    } catch(e) { ... }
-
-Rules — follow EXACTLY:
-1. Write TOP-LEVEL STATEMENTS only. They execute immediately.
-2. Do NOT wrap your code in `function foo() { ... }`. If you define a function, also CALL it on the next line.
-3. Do NOT include placeholder comments like `// Your code here`. Write the actual drawing code.
-4. Do NOT redeclare `ctx`, `W`, `H`, or `canvas`. Use them as-is.
-5. Do NOT output prose, markdown fences (```), <script> tags, HTML, or `document.getElementById`.
-6. No network, no external assets, no infinite loops.
-7. Pixel-art style preferred: integer coords, blocky shapes, limited palette, fillRect.
-
-Now produce the code for the user's prompt. Output JavaScript only.
-"""
+from system_prompts import SYSTEM_PROMPT_VARIANTS, get as _get_sp
 
 _FENCE_RE = re.compile(r"```(?:javascript|js|html|jsx|typescript|ts)?\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
@@ -83,7 +65,13 @@ def main() -> int:
     ap.add_argument("--side", choices=["base", "tuned"], required=True)
     ap.add_argument("--prompts", default=str(ROOT / "eval_prompts.txt"))
     ap.add_argument("--temp", type=float, default=0.6)
-    ap.add_argument("--max-tokens", type=int, default=1500)
+    ap.add_argument("--max-tokens", type=int, default=2000)
+    ap.add_argument("--system-prompt-id", default="A", choices=list(SYSTEM_PROMPT_VARIANTS),
+                    help="which system prompt variant to use (default A)")
+    ap.add_argument("--quant", choices=["none", "4bit"], default="none",
+                    help="load base in 4-bit (needed for 7B+ on 12GB to avoid CPU offload)")
+    ap.add_argument("--draft", default=None, help="speculative decoding: HF id of draft model (must share tokenizer)")
+    ap.add_argument("--draft-adapter", default=None, help="LoRA adapter to apply to draft model")
     ap.add_argument("--out", default=None, help="output jsonl (default: side_{side}.jsonl)")
     ap.add_argument("--overwrite", action="store_true")
     args = ap.parse_args()
@@ -123,30 +111,73 @@ def main() -> int:
         tok.pad_token = tok.eos_token
 
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-    model = AutoModelForCausalLM.from_pretrained(args.base, dtype=dtype, device_map="auto" if torch.cuda.is_available() else None)
+    load_kwargs = dict(device_map="auto" if torch.cuda.is_available() else None)
+    if args.quant == "4bit":
+        from transformers import BitsAndBytesConfig
+        load_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=dtype,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+        )
+    else:
+        load_kwargs["dtype"] = dtype
+    model = AutoModelForCausalLM.from_pretrained(args.base, **load_kwargs)
 
     model_id = args.base
     if args.adapter:
-        print(f"[infer:{args.side}] adapter: {args.adapter}")
+        print(f"[infer:{args.side}] adapter: {args.adapter} (quant={args.quant})")
         model = PeftModel.from_pretrained(model, args.adapter)
-        model = model.merge_and_unload()
+        if args.quant == "none":
+            # safe to merge when not quantized
+            model = model.merge_and_unload()
+        # else: keep adapter attached on top of 4-bit base
         model_id = f"{args.base}+adapter:{Path(args.adapter).name}"
 
     model.eval()
 
+    draft_model = None
+    draft_tok = None
+    if args.draft:
+        print(f"[infer:{args.side}] draft: {args.draft} adapter={args.draft_adapter}")
+        draft_tok = AutoTokenizer.from_pretrained(args.draft)
+        if draft_tok.pad_token is None:
+            draft_tok.pad_token = draft_tok.eos_token
+        draft_model = AutoModelForCausalLM.from_pretrained(
+            args.draft,
+            dtype=dtype,
+            device_map="auto" if torch.cuda.is_available() else None,
+        )
+        if args.draft_adapter:
+            draft_model = PeftModel.from_pretrained(draft_model, args.draft_adapter)
+            draft_model = draft_model.merge_and_unload()
+        draft_model.eval()
+        model_id += f"+spec({Path(args.draft).name})"
+        if args.draft_adapter:
+            model_id += f"+draft_adapter:{Path(args.draft_adapter).name}"
+
+    sp_text = _get_sp(args.system_prompt_id)
+    print(f"[infer:{args.side}] system prompt variant: {args.system_prompt_id}")
+
     def gen(prompt: str) -> tuple[str, str]:
-        msgs = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
+        msgs = [{"role": "system", "content": sp_text}, {"role": "user", "content": prompt}]
         text = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
         inputs = tok(text, return_tensors="pt").to(model.device)
         prompt_len = inputs["input_ids"].shape[-1]
+        gen_kwargs = dict(
+            max_new_tokens=args.max_tokens,
+            temperature=args.temp,
+            do_sample=True,
+            pad_token_id=tok.eos_token_id,
+        )
+        if draft_model is not None:
+            gen_kwargs["assistant_model"] = draft_model
+            # Universal assisted decoding — needed when target/draft tokenizers differ
+            # (or when transformers' validator can't prove they match).
+            gen_kwargs["tokenizer"] = tok
+            gen_kwargs["assistant_tokenizer"] = draft_tok
         with torch.no_grad():
-            out = model.generate(
-                **inputs,
-                max_new_tokens=args.max_tokens,
-                temperature=args.temp,
-                do_sample=True,
-                pad_token_id=tok.eos_token_id,
-            )
+            out = model.generate(**inputs, **gen_kwargs)
         new_ids = out[0][prompt_len:]
         raw = tok.decode(new_ids, skip_special_tokens=True)
         return raw, strip_fences(raw)

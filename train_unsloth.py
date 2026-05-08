@@ -1,0 +1,235 @@
+#!/usr/bin/env -S uv run --quiet
+# /// script
+# requires-python = ">=3.11,<3.13"
+# dependencies = [
+#   "unsloth>=2024.10",
+#   "trl>=0.12",
+#   "datasets>=3.0",
+#   "transformers>=4.46",
+#   "peft>=0.13",
+#   "accelerate>=1.0",
+#   "bitsandbytes>=0.44",
+# ]
+# ///
+"""
+SFT via Unsloth — ~2× faster + ~50% less VRAM than train_sft.py for 7B+ QLoRA.
+
+Same data path as train_sft.py: reads results/*.jsonl + (optional) prefs.jsonl,
+extracts rank-1 chosen completions, formats as Qwen chat, trains LoRA.
+
+Usage:
+  ./train_unsloth.py --model unsloth/Qwen2.5-Coder-7B-Instruct --epochs 5
+  ./train_unsloth.py --model unsloth/Qwen2.5-Coder-0.5B-Instruct --epochs 10  # 0.5B
+"""
+from __future__ import annotations
+
+import argparse
+import glob
+import hashlib
+import json
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).parent
+RESULTS = ROOT / "results"
+PRIVATE_PREFS = ROOT / "prefs.jsonl"
+CHECKPOINT_DIR = ROOT / "checkpoints"
+
+SYSTEM_PROMPT = """You output a JavaScript snippet that draws on an HTML canvas.
+
+Your code is inserted directly inside this wrapper:
+    const ctx = canvas.getContext('2d');
+    const W = 400, H = 400;
+    try {
+        // <-- YOUR CODE GOES HERE (executes immediately)
+    } catch(e) { ... }
+
+Rules — follow EXACTLY:
+1. Write TOP-LEVEL STATEMENTS only. They execute immediately.
+2. Do NOT wrap your code in `function foo() { ... }`. If you define a function, also CALL it on the next line.
+3. Do NOT include placeholder comments like `// Your code here`. Write the actual drawing code.
+4. Do NOT redeclare `ctx`, `W`, `H`, or `canvas`. Use them as-is.
+5. Do NOT output prose, markdown fences (```), <script> tags, HTML, or `document.getElementById`.
+6. No network, no external assets, no infinite loops.
+7. Pixel-art style preferred: integer coords, blocky shapes, limited palette, fillRect.
+
+Now produce the code for the user's prompt. Output JavaScript only.
+"""
+
+
+def fingerprint(rec: dict) -> str:
+    cands = rec.get("candidates") or []
+    h = hashlib.sha1()
+    for c in cands: h.update((c or "").encode("utf-8", errors="replace")); h.update(b"\x00")
+    return f"{rec.get('ts',0):.3f}|{rec.get('prompt','')}|{h.hexdigest()[:16]}"
+
+
+def collect_examples(include_private: bool) -> tuple[list[dict], int, int]:
+    seen: dict[str, dict] = {}
+    paths = sorted(glob.glob(str(RESULTS / "*.jsonl")))
+    if include_private and PRIVATE_PREFS.exists():
+        paths.append(str(PRIVATE_PREFS))
+    for fp in paths:
+        for line in Path(fp).read_text().splitlines():
+            line = line.strip()
+            if not line: continue
+            try: r = json.loads(line)
+            except Exception: continue
+            if r.get("schema") != "rank-v1": continue
+            if r.get("obsolete"): continue
+            seen.setdefault(fingerprint(r), r)
+
+    examples = []
+    skipped = 0
+    for rec in seen.values():
+        cands = rec.get("candidates") or []
+        ranks = rec.get("rankings") or []
+        errs = rec.get("errored") or [False] * len(cands)
+        sus = rec.get("suspect") or [False] * len(cands)
+        best_idx, best_rank = None, 999
+        for i, rank in enumerate(ranks):
+            if errs[i] or sus[i] or rank is None: continue
+            if rank < best_rank:
+                best_rank = rank; best_idx = i
+        if best_idx is None or not cands[best_idx]:
+            skipped += 1; continue
+        examples.append({
+            "prompt": rec["prompt"],
+            "completion": cands[best_idx],
+            "rank": best_rank,
+            "model": rec.get("model"),
+        })
+    return examples, len(seen), skipped
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", default="unsloth/Qwen2.5-Coder-7B-Instruct",
+                    help="Unsloth model id (use 'unsloth/...' for fastest path)")
+    ap.add_argument("--epochs", type=int, default=5)
+    ap.add_argument("--rank", type=int, default=16)
+    ap.add_argument("--alpha", type=int, default=32)
+    ap.add_argument("--lr", type=float, default=2e-4)
+    ap.add_argument("--batch", type=int, default=2)
+    ap.add_argument("--accum", type=int, default=4)
+    ap.add_argument("--max-seq", type=int, default=2048)
+    ap.add_argument("--load-4bit", action="store_true", default=True, help="QLoRA 4-bit (default true for 7B+)")
+    ap.add_argument("--no-4bit", dest="load_4bit", action="store_false")
+    ap.add_argument("--include-prefs", action="store_true")
+    ap.add_argument("--filter-model", default=None)
+    ap.add_argument("--random-fraction", type=float, default=0.0)
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--output", default=None)
+    args = ap.parse_args()
+
+    examples, total_records, skipped = collect_examples(args.include_prefs)
+    if args.filter_model:
+        before = len(examples)
+        examples = [e for e in examples if e.get("model") and args.filter_model in e["model"]]
+        print(f"filter --filter-model={args.filter_model!r}: {before} → {len(examples)}")
+    if args.random_fraction and 0 < args.random_fraction < 1:
+        import random as _rnd
+        rng = _rnd.Random(args.seed)
+        before = len(examples)
+        keep = max(1, int(round(before * args.random_fraction)))
+        examples = rng.sample(examples, keep)
+        print(f"random subsample (frac={args.random_fraction}): {before} → {len(examples)}")
+
+    if not examples:
+        print("ERROR: no examples", file=sys.stderr); return 1
+    print(f"loaded {total_records} records, {len(examples)} chosen ({skipped} skipped)")
+    by_model = {}
+    for e in examples:
+        by_model[e.get("model") or "?"] = by_model.get(e.get("model") or "?", 0) + 1
+    print(f"by source: {by_model}")
+
+    out_name = args.output or f"unsloth-{args.model.split('/')[-1]}-r{args.rank}-e{args.epochs}-{time.strftime('%Y%m%d-%H%M')}"
+    out_dir = CHECKPOINT_DIR / out_name
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    print("loading unsloth ...")
+    from unsloth import FastLanguageModel  # noqa
+    import torch
+    from datasets import Dataset
+    from trl import SFTTrainer, SFTConfig
+
+    print(f"cuda: {torch.cuda.is_available()} | device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'}")
+
+    print(f"loading {args.model} (4bit={args.load_4bit}) ...")
+    model, tok = FastLanguageModel.from_pretrained(
+        model_name=args.model,
+        max_seq_length=args.max_seq,
+        load_in_4bit=args.load_4bit,
+    )
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+
+    model = FastLanguageModel.get_peft_model(
+        model,
+        r=args.rank,
+        target_modules=["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"],
+        lora_alpha=args.alpha,
+        lora_dropout=0.05,
+        bias="none",
+        use_gradient_checkpointing="unsloth",
+        random_state=args.seed,
+        max_seq_length=args.max_seq,
+    )
+
+    def fmt(ex):
+        msgs = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": ex["prompt"]},
+            {"role": "assistant", "content": ex["completion"]},
+        ]
+        return {"text": tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=False)}
+
+    ds = Dataset.from_list(examples).map(fmt, remove_columns=["prompt","completion","rank","model"])
+    print(f"training set: {len(ds)} examples")
+
+    cfg = SFTConfig(
+        output_dir=str(out_dir),
+        num_train_epochs=args.epochs,
+        per_device_train_batch_size=args.batch,
+        gradient_accumulation_steps=args.accum,
+        learning_rate=args.lr,
+        warmup_ratio=0.03,
+        lr_scheduler_type="cosine",
+        logging_steps=5,
+        save_strategy="epoch",
+        save_total_limit=2,
+        bf16=torch.cuda.is_bf16_supported(),
+        fp16=not torch.cuda.is_bf16_supported() and torch.cuda.is_available(),
+        max_length=args.max_seq,
+        optim="adamw_8bit",
+        seed=args.seed,
+        report_to="none",
+    )
+
+    trainer = SFTTrainer(model=model, args=cfg, train_dataset=ds, processing_class=tok)
+    t0 = time.time()
+    print(f"starting training: {args.epochs} epochs × {len(ds)} examples → {out_dir}")
+    trainer.train()
+    dt = time.time() - t0
+    print(f"\n=== training done in {dt/60:.1f} min ===")
+
+    trainer.save_model(str(out_dir))
+    tok.save_pretrained(str(out_dir))
+    summary = {
+        "model": args.model,
+        "framework": "unsloth",
+        "examples": len(examples),
+        "epochs": args.epochs,
+        "rank": args.rank, "alpha": args.alpha, "lr": args.lr,
+        "batch": args.batch, "accum": args.accum, "max_seq": args.max_seq,
+        "by_source_model": by_model,
+        "wall_seconds": dt,
+    }
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+    print(f"saved to {out_dir}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
