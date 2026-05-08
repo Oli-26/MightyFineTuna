@@ -134,7 +134,17 @@ const resetBtn = $("#reset");
 const promptInp = $("#prompt");
 
 let nCandidates = 3;
+let tempPool = [0.3, 0.5, 0.7, 0.9, 1.1, 1.3];
 const cards = () => $$(".card");
+
+function sampleTemps(n) {
+  const pool = tempPool.slice();
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool.slice(0, n);
+}
 
 // Per-round state
 let state = null; // { prompt, candidates: string[], temps: number[], errored: bool[], suspect: bool[], ranks: (number|null)[] }
@@ -408,15 +418,14 @@ async function updateReviewBtn(known) {
   reviewBtn.disabled = rem === 0;
 }
 
-async function generateOne(prompt, slot, tempIndex, t0) {
-  // `slot` = position in the UI (0..N-1, fixed visually).
-  // `tempIndex` = which temperature to request — randomized per round so
-  // card-position is decoupled from temperature (no position-vs-temp bias).
+async function generateOne(prompt, slot, temp, t0) {
+  // `slot` = visual position (fixed in DOM).
+  // `temp` = sampled from TEMP_POOL — slot ↔ temp randomized per round.
   setCardLoading(slot, t0);
   try {
     const r = await fetch("/generate_one", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ prompt, index: tempIndex }),
+      body: JSON.stringify({ prompt, temp }),
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
     const data = await r.json();
@@ -474,10 +483,10 @@ async function generate() {
   state = freshState(prompt);
   setBusy(true);
   const t0 = performance.now();
-  const tempPerm = shuffled(Array.from({ length: nCandidates }, (_, i) => i));  // slot -> tempIndex
+  const temps = sampleTemps(nCandidates);  // distinct random temps from pool
   const tasks = [];
   for (let slot = 0; slot < nCandidates; slot++) {
-    tasks.push(generateOne(prompt, slot, tempPerm[slot], t0));
+    tasks.push(generateOne(prompt, slot, temps[slot], t0));
   }
   await Promise.allSettled(tasks);
   statusEl.textContent = `gen done in ${((performance.now() - t0) / 1000).toFixed(1)}s`;
@@ -504,6 +513,7 @@ cards().forEach((card, i) => {
     const hd = await h.json();
     const cd = await c.json();
     nCandidates = cd.n || 3;
+    if (Array.isArray(cd.temp_pool) && cd.temp_pool.length >= nCandidates) tempPool = cd.temp_pool;
     $("#backend-url").textContent = `${hd.url} (${h.ok ? "up" : "down"})`;
   } catch { $("#backend-url").textContent = "unreachable"; }
   updateReviewBtn();

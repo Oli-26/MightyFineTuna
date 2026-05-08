@@ -56,24 +56,36 @@ def already_done_prompts(pending: Path) -> set[str]:
     return seen
 
 
-async def gen_one(client: httpx.AsyncClient, url: str, prompt: str, index: int) -> dict:
+DEFAULT_TEMP_POOL = [0.3, 0.5, 0.7, 0.9, 1.1, 1.3]
+
+
+async def gen_one(client: httpx.AsyncClient, url: str, prompt: str, temp: float) -> dict:
     r = await client.post(
         f"{url}/generate_one",
-        json={"prompt": prompt, "index": index},
+        json={"prompt": prompt, "temp": temp},
         timeout=900.0,
     )
     r.raise_for_status()
     return r.json()
 
 
-async def gen_batch(client: httpx.AsyncClient, url: str, prompt: str, n: int) -> list[dict]:
-    # picker is np=1 typically, so requests serialize at llama-server. Fire all,
-    # let server queue them. Catch per-task exceptions.
-    # Shuffle temp-index per slot so card position is decoupled from temperature
-    # (matches the live UI's per-round shuffle, kills position/temp bias).
-    perm = list(range(n))
-    random.shuffle(perm)
-    tasks = [gen_one(client, url, prompt, perm[slot]) for slot in range(n)]
+async def fetch_temp_pool(client: httpx.AsyncClient, url: str) -> list[float]:
+    try:
+        r = await client.get(f"{url}/config", timeout=5.0)
+        d = r.json()
+        pool = d.get("temp_pool")
+        if isinstance(pool, list) and pool:
+            return [float(t) for t in pool]
+    except Exception:
+        pass
+    return DEFAULT_TEMP_POOL
+
+
+async def gen_batch(client: httpx.AsyncClient, url: str, prompt: str, n: int, pool: list[float]) -> list[dict]:
+    # Sample n distinct temps from pool (random per prompt) → wider variance per
+    # round than the old fixed [0.4, 0.75, 1.05]. Slot ↔ temp randomized too.
+    chosen = random.sample(pool, k=min(n, len(pool)))
+    tasks = [gen_one(client, url, prompt, chosen[slot]) for slot in range(n)]
     return await asyncio.gather(*tasks, return_exceptions=True)
 
 
@@ -119,11 +131,14 @@ async def main() -> int:
             print(f"[batch] picker not reachable at {args.url}: {e}", file=sys.stderr)
             return 1
 
+        pool = await fetch_temp_pool(client, args.url)
+        print(f"[batch] temp pool: {pool}", flush=True)
+
         for i, prompt in enumerate(prompts, 1):
             t0 = time.time()
             print(f"[{i}/{len(prompts)}] {prompt!r}", flush=True)
             try:
-                results = await gen_batch(client, args.url, prompt, args.n)
+                results = await gen_batch(client, args.url, prompt, args.n, pool)
             except Exception as e:
                 print(f"  ! batch error: {e}", file=sys.stderr)
                 continue

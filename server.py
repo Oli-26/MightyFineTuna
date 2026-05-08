@@ -31,7 +31,10 @@ EVAL_JUDGMENTS = ROOT / "eval_judgments.jsonl"
 
 LLAMA_URL = os.environ.get("LLAMA_URL", "http://127.0.0.1:8080")
 N_CANDIDATES = int(os.environ.get("N_CANDIDATES", "3"))
-TEMPS = [0.4, 0.75, 1.05]  # one per candidate; pad/trim to N_CANDIDATES
+# Wider pool than the fixed [0.4, 0.75, 1.05]. Each round samples N_CANDIDATES
+# distinct temps from the pool — more variance per round → stronger preference signal.
+TEMP_POOL = [float(t) for t in os.environ.get("TEMP_POOL", "0.3,0.5,0.7,0.9,1.1,1.3").split(",")]
+TEMPS = TEMP_POOL[:N_CANDIDATES]  # legacy: still expose first N for /config
 MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "1200"))
 REQ_TIMEOUT = float(os.environ.get("REQ_TIMEOUT", "600"))
 HOST_TAG = os.environ.get("HOST_TAG", socket.gethostname())
@@ -95,7 +98,8 @@ class GenReq(BaseModel):
 
 class GenOneReq(BaseModel):
     prompt: str
-    index: int  # which slot (0..N-1) — picks temperature
+    index: int | None = None  # legacy: maps into TEMPS[index]
+    temp: float | None = None  # preferred: explicit temperature
 
 
 class PickReq(BaseModel):
@@ -183,10 +187,15 @@ async def _one_completion(client: httpx.AsyncClient, prompt: str, temperature: f
 async def generate_one(req: GenOneReq):
     if not req.prompt.strip():
         raise HTTPException(400, "empty prompt")
-    temps = _temps_for(N_CANDIDATES)
-    if req.index < 0 or req.index >= len(temps):
-        raise HTTPException(400, f"index out of range 0..{len(temps) - 1}")
-    temp = temps[req.index]
+    if req.temp is not None:
+        temp = req.temp
+    elif req.index is not None:
+        temps = _temps_for(N_CANDIDATES)
+        if req.index < 0 or req.index >= len(temps):
+            raise HTTPException(400, f"index out of range 0..{len(temps) - 1}")
+        temp = temps[req.index]
+    else:
+        raise HTTPException(400, "must provide either 'temp' or 'index'")
     async with httpx.AsyncClient() as client:
         try:
             code = await _one_completion(client, req.prompt, temp)
@@ -197,7 +206,7 @@ async def generate_one(req: GenOneReq):
 
 @app.get("/config")
 async def config():
-    return {"n": N_CANDIDATES, "temps": _temps_for(N_CANDIDATES)}
+    return {"n": N_CANDIDATES, "temps": _temps_for(N_CANDIDATES), "temp_pool": TEMP_POOL}
 
 
 @app.post("/generate")
