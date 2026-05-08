@@ -21,6 +21,7 @@ import argparse
 import asyncio
 import json
 import os
+import random
 import socket
 import sys
 import time
@@ -68,7 +69,11 @@ async def gen_one(client: httpx.AsyncClient, url: str, prompt: str, index: int) 
 async def gen_batch(client: httpx.AsyncClient, url: str, prompt: str, n: int) -> list[dict]:
     # picker is np=1 typically, so requests serialize at llama-server. Fire all,
     # let server queue them. Catch per-task exceptions.
-    tasks = [gen_one(client, url, prompt, i) for i in range(n)]
+    # Shuffle temp-index per slot so card position is decoupled from temperature
+    # (matches the live UI's per-round shuffle, kills position/temp bias).
+    perm = list(range(n))
+    random.shuffle(perm)
+    tasks = [gen_one(client, url, prompt, perm[slot]) for slot in range(n)]
     return await asyncio.gather(*tasks, return_exceptions=True)
 
 

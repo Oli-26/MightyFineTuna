@@ -408,29 +408,30 @@ async function updateReviewBtn(known) {
   reviewBtn.disabled = rem === 0;
 }
 
-async function generateOne(prompt, index, t0) {
-  setCardLoading(index, t0);
+async function generateOne(prompt, slot, tempIndex, t0) {
+  // `slot` = position in the UI (0..N-1, fixed visually).
+  // `tempIndex` = which temperature to request — randomized per round so
+  // card-position is decoupled from temperature (no position-vs-temp bias).
+  setCardLoading(slot, t0);
   try {
     const r = await fetch("/generate_one", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ prompt, index }),
+      body: JSON.stringify({ prompt, index: tempIndex }),
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
     const data = await r.json();
-    state.candidates[index] = data.code || "";
-    state.temps[index] = data.temp;
+    state.candidates[slot] = data.code || "";
+    state.temps[slot] = data.temp;
     if (data.error) {
-      fillCard(index, `// generation error: ${data.error}\nthrow new Error(${JSON.stringify(data.error)});`, data.temp, { errored: true });
-      state.settled[index] = true;
+      fillCard(slot, `// generation error: ${data.error}\nthrow new Error(${JSON.stringify(data.error)});`, data.temp, { errored: true });
+      state.settled[slot] = true;
     } else {
-      // server-side suspect flag: code has no draw calls -> probably blank
-      fillCard(index, data.code, data.temp, { suspect: !!data.suspect });
-      // settled will be set by iframe postMessage (ok or runtime error)
+      fillCard(slot, data.code, data.temp, { suspect: !!data.suspect });
     }
   } catch (e) {
-    fillCard(index, `// fetch error: ${e.message}\nthrow new Error(${JSON.stringify(e.message)});`, null, { errored: true });
-    state.candidates[index] = "";
-    state.settled[index] = true;
+    fillCard(slot, `// fetch error: ${e.message}\nthrow new Error(${JSON.stringify(e.message)});`, null, { errored: true });
+    state.candidates[slot] = "";
+    state.settled[slot] = true;
   }
 }
 
@@ -457,6 +458,15 @@ window.addEventListener("message", (ev) => {
   if (state.settled.every(Boolean)) autoRankBads();
 });
 
+function shuffled(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 async function generate() {
   const prompt = promptInp.value.trim();
   if (!prompt) return;
@@ -464,13 +474,14 @@ async function generate() {
   state = freshState(prompt);
   setBusy(true);
   const t0 = performance.now();
+  const tempPerm = shuffled(Array.from({ length: nCandidates }, (_, i) => i));  // slot -> tempIndex
   const tasks = [];
-  for (let i = 0; i < nCandidates; i++) tasks.push(generateOne(prompt, i, t0));
+  for (let slot = 0; slot < nCandidates; slot++) {
+    tasks.push(generateOne(prompt, slot, tempPerm[slot], t0));
+  }
   await Promise.allSettled(tasks);
   statusEl.textContent = `gen done in ${((performance.now() - t0) / 1000).toFixed(1)}s`;
   setBusy(false);
-  // Initial auto-rank (covers suspect/errored we already know about).
-  // Iframes may add more 'errored' via postMessage afterward.
   autoRankBads();
 }
 
