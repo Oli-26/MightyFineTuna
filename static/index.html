@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>canvas picker</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: #0e0e10; color: #e6e6e6; margin: 0; padding: 16px; }
+  header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 600; }
+  #status { font-size: 12px; opacity: 0.7; min-width: 120px; }
+  #prompt { flex: 1; min-width: 300px; background: #1a1a1d; color: #fff; border: 1px solid #333; padding: 8px 10px; border-radius: 6px; font-size: 14px; }
+  button { background: #2a2a30; color: #fff; border: 1px solid #444; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  button:hover:not(:disabled) { background: #3a3a42; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.primary { background: #2d5fa3; border-color: #4a7fc8; }
+  button.success { background: #1f5d3a; border-color: #2f8d54; }
+  button.danger { background: #6a2a2a; border-color: #884; }
+
+  #grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .card { background: #16161a; border: 2px solid #2a2a30; border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 6px; min-width: 0; position: relative; }
+  .card.loading { border-color: #4a7fc8; }
+  .card.errored { border-color: #d97757; }
+  .card.suspect { border-color: #c89a3a; }
+  .card.ranked { border-color: #4ade80; box-shadow: 0 0 0 2px #4ade8033; }
+  .card.locked .frame-wrap { cursor: not-allowed; }
+  .card-head { display: flex; justify-content: space-between; align-items: center; font-size: 11px; opacity: 0.7; }
+  .frame-wrap { background: #000; border-radius: 4px; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; cursor: pointer; }
+  iframe { width: 100%; height: 100%; border: 0; display: block; pointer-events: none; }
+  .overlay { position: absolute; inset: 0; background: rgba(10,10,12,0.85); display: none; align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: #aaa; font-size: 12px; }
+  .card.loading .overlay { display: flex; }
+  .overlay .big-spinner { width: 32px; height: 32px; border: 3px solid #333; border-top-color: #4a7fc8; border-radius: 50%; animation: spin 0.9s linear infinite; }
+  .overlay .elapsed { font-variant-numeric: tabular-nums; opacity: 0.6; }
+
+  /* Rank badge (top-right corner overlay) */
+  .rank-badge {
+    position: absolute; top: 12px; right: 12px;
+    width: 38px; height: 38px; border-radius: 50%;
+    display: none; align-items: center; justify-content: center;
+    font-size: 18px; font-weight: 700; color: #fff;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+    pointer-events: none; z-index: 5;
+  }
+  .card.ranked .rank-badge { display: flex; }
+  .card.errored .rank-badge { display: flex; background: #d97757; border: 2px solid #f0a080; }
+  .card.suspect:not(.errored) .rank-badge { display: flex; background: #c89a3a; border: 2px solid #e8c060; }
+  .rank-badge.r1 { background: #4ade80; color: #022; border: 2px solid #80f0a0; }
+  .rank-badge.r2 { background: #4a90c8; border: 2px solid #80b8e0; }
+  .rank-badge.r3 { background: #6a6a78; border: 2px solid #8a8a98; }
+
+  /* Status pill below frame */
+  .card-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11px; }
+  .badge { padding: 2px 8px; border-radius: 4px; font-weight: 600; opacity: 0.9; }
+  .badge.b-error { background: #d9775744; color: #fcb; }
+  .badge.b-suspect { background: #c89a3a44; color: #fec; }
+  .badge.b-ok { background: #2a2a30; color: #888; }
+  .hint { opacity: 0.6; font-size: 11px; }
+  .rank-row { display: flex; gap: 6px; }
+  .rank-row button { flex: 1; padding: 6px 0; font-size: 13px; font-weight: 600; }
+  .rank-row button.active { background: #4ade80; color: #022; border-color: #80f0a0; }
+  .rank-row button.active.r2 { background: #4a90c8; color: #fff; border-color: #80b8e0; }
+  .rank-row button.active.r3 { background: #6a6a78; color: #fff; border-color: #8a8a98; }
+
+  /* Top progress bar */
+  #progress { position: fixed; top: 0; left: 0; right: 0; height: 3px; background: transparent; overflow: hidden; z-index: 10; pointer-events: none; }
+  #progress.active::before { content: ''; display: block; height: 100%; width: 30%; background: linear-gradient(90deg, transparent, #4a7fc8, transparent); animation: slide 1.2s ease-in-out infinite; }
+  @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(450%); } }
+
+  details { font-size: 11px; }
+  details pre { background: #0a0a0c; padding: 8px; border-radius: 4px; overflow: auto; max-height: 200px; font-size: 11px; }
+  #footer { margin-top: 16px; font-size: 12px; opacity: 0.6; }
+  .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid #444; border-top-color: #4ade80; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="progress"></div>
+<header>
+  <h1>canvas picker</h1>
+  <input id="prompt" placeholder="e.g. pixel-art knight with red cape on grass" autofocus />
+  <button id="go" class="primary">Generate</button>
+  <button id="review">Review queue (?)</button>
+  <button id="skip" disabled>Skip</button>
+  <button id="submit" class="success" disabled>Submit ranks</button>
+  <button id="reset" disabled>Reset</button>
+  <span id="status"></span>
+</header>
+<div id="grid">
+  <div class="card" data-i="0">
+    <div class="card-head"><span>#1</span><span class="temp"></span></div>
+    <div class="frame-wrap">
+      <iframe sandbox="allow-scripts"></iframe>
+      <div class="overlay"><div class="big-spinner"></div><div class="elapsed">0.0s</div></div>
+      <div class="rank-badge"></div>
+    </div>
+    <div class="card-foot"><span class="badge b-ok">—</span><span class="hint"></span></div>
+    <div class="rank-row"><button data-rank="1">1 best</button><button data-rank="2">2</button><button data-rank="3">3 worst</button></div>
+    <details><summary>code</summary><pre></pre></details>
+  </div>
+  <div class="card" data-i="1">
+    <div class="card-head"><span>#2</span><span class="temp"></span></div>
+    <div class="frame-wrap">
+      <iframe sandbox="allow-scripts"></iframe>
+      <div class="overlay"><div class="big-spinner"></div><div class="elapsed">0.0s</div></div>
+      <div class="rank-badge"></div>
+    </div>
+    <div class="card-foot"><span class="badge b-ok">—</span><span class="hint"></span></div>
+    <div class="rank-row"><button data-rank="1">1 best</button><button data-rank="2">2</button><button data-rank="3">3 worst</button></div>
+    <details><summary>code</summary><pre></pre></details>
+  </div>
+  <div class="card" data-i="2">
+    <div class="card-head"><span>#3</span><span class="temp"></span></div>
+    <div class="frame-wrap">
+      <iframe sandbox="allow-scripts"></iframe>
+      <div class="overlay"><div class="big-spinner"></div><div class="elapsed">0.0s</div></div>
+      <div class="rank-badge"></div>
+    </div>
+    <div class="card-foot"><span class="badge b-ok">—</span><span class="hint"></span></div>
+    <div class="rank-row"><button data-rank="1">1 best</button><button data-rank="2">2</button><button data-rank="3">3 worst</button></div>
+    <details><summary>code</summary><pre></pre></details>
+  </div>
+</div>
+<div id="footer">Click candidates best→worst. Errored/suspect auto-marked worst. Logged to <code>prefs.jsonl</code>. Backend: <span id="backend-url">…</span></div>
+
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+const statusEl = $("#status");
+const goBtn = $("#go");
+const reviewBtn = $("#review");
+const skipBtn = $("#skip");
+const submitBtn = $("#submit");
+const resetBtn = $("#reset");
+const promptInp = $("#prompt");
+
+let nCandidates = 3;
+const cards = () => $$(".card");
+
+// Per-round state
+let state = null; // { prompt, candidates: string[], temps: number[], errored: bool[], suspect: bool[], ranks: (number|null)[] }
+
+function freshState(prompt) {
+  return {
+    prompt,
+    candidates: new Array(nCandidates).fill(""),
+    temps: new Array(nCandidates).fill(null),
+    errored: new Array(nCandidates).fill(false),
+    suspect: new Array(nCandidates).fill(false),
+    ranks: new Array(nCandidates).fill(null),
+    settled: new Array(nCandidates).fill(false),
+    pending_id: null,
+  };
+}
+
+function buildSrcdoc(code, index) {
+  // JSON.stringify code → parse-time SyntaxErrors become runtime throws (catchable).
+  // Embed index so iframe can postMessage back to parent identifying itself.
+  const codeJson = JSON.stringify(code);
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+    html,body{margin:0;background:#000;height:100%;width:100%;overflow:hidden;display:flex;align-items:center;justify-content:center}
+    canvas{image-rendering:pixelated;image-rendering:crisp-edges;background:#111;max-width:100%;max-height:100%;display:block}
+  </style></head><body>
+  <canvas id="c" width="400" height="400"></canvas>
+  <script>
+  (function(){
+    const __i = ${index};
+    function notify(status, msg) {
+      try { window.parent.postMessage({src:'pickerCard',i:__i,status:status,msg:msg||''}, '*'); } catch(e) {}
+    }
+    const c=document.getElementById('c');
+    const ctx=c.getContext('2d');
+    const W=400,H=400;
+    ctx.imageSmoothingEnabled=false;
+    const __code=${codeJson};
+    try {
+      new Function('ctx','W','H','canvas',__code)(ctx,W,H,c);
+      notify('ok');
+    } catch(e) {
+      ctx.fillStyle='#400';ctx.fillRect(0,0,W,H);
+      ctx.fillStyle='#fbb';ctx.font='12px monospace';
+      const msg=(e && e.name? e.name+': ':'')+String(e && e.message || e);
+      let y=20; for(const line of msg.match(/.{1,40}/g)||[msg]){ ctx.fillText(line,10,y); y+=14; }
+      notify('error', msg);
+    }
+  })();
+  <\/script></body></html>`;
+}
+
+function setBusy(b) {
+  goBtn.disabled = b;
+  goBtn.innerHTML = b ? '<span class="spinner"></span> Generating' : 'Generate';
+  $("#progress").classList.toggle("active", b);
+  if (b) statusEl.textContent = "";
+}
+
+function clearCards() {
+  cards().forEach((card) => {
+    card.classList.remove("ranked", "errored", "suspect", "loading", "locked");
+    card.querySelector("iframe").srcdoc = "";
+    card.querySelector(".temp").textContent = "";
+    card.querySelector("details pre").textContent = "";
+    card.querySelector(".elapsed").textContent = "0.0s";
+    card.querySelector(".rank-badge").className = "rank-badge";
+    card.querySelector(".rank-badge").textContent = "";
+    const badge = card.querySelector(".badge");
+    badge.className = "badge b-ok"; badge.textContent = "—";
+    card.querySelector(".hint").textContent = "";
+    card.querySelectorAll(".rank-row button").forEach(b => { b.disabled = true; b.classList.remove("active", "r2", "r3"); });
+  });
+  submitBtn.disabled = true;
+  resetBtn.disabled = true;
+  skipBtn.disabled = true;
+}
+
+function setCardLoading(i, t0) {
+  const card = cards()[i];
+  card.classList.add("loading");
+  card.classList.remove("errored", "suspect", "ranked", "locked");
+  const elapsedEl = card.querySelector(".elapsed");
+  const interval = setInterval(() => {
+    if (!card.classList.contains("loading")) { clearInterval(interval); return; }
+    elapsedEl.textContent = `${((performance.now() - t0) / 1000).toFixed(1)}s`;
+  }, 100);
+}
+
+function fillCard(i, code, temp, opts = {}) {
+  const card = cards()[i];
+  card.classList.remove("loading");
+  card.querySelector(".temp").textContent = temp != null ? `t=${temp}` : "";
+  card.querySelector("iframe").srcdoc = buildSrcdoc(code, i);
+  card.querySelector("details pre").textContent = code;
+  // status badge
+  const badge = card.querySelector(".badge");
+  if (opts.errored) {
+    state.errored[i] = true;
+    card.classList.add("errored", "locked");
+    badge.className = "badge b-error"; badge.textContent = "ERROR";
+  } else if (opts.suspect) {
+    state.suspect[i] = true;
+    card.classList.add("suspect", "locked");
+    badge.className = "badge b-suspect"; badge.textContent = "no draw calls";
+  } else {
+    badge.className = "badge b-ok"; badge.textContent = "ok";
+    card.querySelectorAll(".rank-row button").forEach(b => { b.disabled = false; });
+  }
+}
+
+function setRank(i, rank) {
+  if (!state) return;
+  if (state.errored[i] || state.suspect[i]) return;
+  // If another card already holds this rank, swap with this card's old rank (or null)
+  const prev = state.ranks[i];
+  if (rank === prev) {
+    // toggle off
+    state.ranks[i] = null;
+  } else {
+    for (let j = 0; j < state.ranks.length; j++) {
+      if (j !== i && state.ranks[j] === rank && !state.errored[j] && !state.suspect[j]) {
+        state.ranks[j] = prev; // swap
+      }
+    }
+    state.ranks[i] = rank;
+  }
+  refreshRanks();
+}
+
+// Re-derive UI from state.ranks (badges, classes, submit-enabled)
+function refreshRanks() {
+  const N = state.ranks.length;
+  cards().forEach((card, i) => {
+    const r = state.ranks[i];
+    const badgeEl = card.querySelector(".rank-badge");
+    badgeEl.className = "rank-badge" + (r ? ` r${Math.min(r, 3)}` : "");
+    badgeEl.textContent = r ? r : (state.errored[i] ? "✕" : (state.suspect[i] ? "?" : ""));
+    card.classList.toggle("ranked", r != null && !state.errored[i] && !state.suspect[i]);
+    // sync rank-row buttons
+    card.querySelectorAll(".rank-row button").forEach(b => {
+      const br = parseInt(b.dataset.rank, 10);
+      b.classList.remove("active", "r2", "r3");
+      if (r === br && !state.errored[i] && !state.suspect[i]) {
+        b.classList.add("active");
+        if (br === 2) b.classList.add("r2");
+        if (br === 3) b.classList.add("r3");
+      }
+    });
+  });
+  // Submit enabled when every card has a rank (auto or manual)
+  const allRanked = state.ranks.every(r => r != null);
+  submitBtn.disabled = !allRanked;
+  resetBtn.disabled = state.ranks.every(r => r == null);
+  // Hint
+  const goodLeft = state.ranks.filter((r, i) => r == null && !state.errored[i] && !state.suspect[i]).length;
+  if (goodLeft > 0) statusEl.textContent = `click ${goodLeft} more (best→worst)`;
+  else if (allRanked) statusEl.textContent = "ready to submit";
+}
+
+// Auto-mark errored/suspect with worst tied rank N (so DPO pairs against any better rank)
+function autoRankBads() {
+  const N = state.ranks.length;
+  for (let i = 0; i < N; i++) {
+    if ((state.errored[i] || state.suspect[i]) && state.ranks[i] == null) {
+      state.ranks[i] = N; // tied at worst
+    }
+  }
+  refreshRanks();
+}
+
+function clickCard(i) {
+  if (!state) return;
+  if (state.errored[i] || state.suspect[i]) return; // locked
+  if (state.ranks[i] != null) {
+    // toggle off — also shift down higher-ranked good cards
+    const removed = state.ranks[i];
+    state.ranks[i] = null;
+    for (let j = 0; j < state.ranks.length; j++) {
+      if (j !== i && state.ranks[j] != null && !state.errored[j] && !state.suspect[j] && state.ranks[j] > removed) {
+        state.ranks[j] -= 1;
+      }
+    }
+  } else {
+    // assign next available manual rank (count of currently-assigned good cards + 1)
+    const used = state.ranks.filter((r, j) => r != null && !state.errored[j] && !state.suspect[j]);
+    state.ranks[i] = used.length + 1;
+  }
+  refreshRanks();
+}
+
+function resetRanks() {
+  if (!state) return;
+  for (let i = 0; i < state.ranks.length; i++) {
+    if (!state.errored[i] && !state.suspect[i]) state.ranks[i] = null;
+  }
+  refreshRanks();
+}
+
+async function submitRanks() {
+  if (!state) return;
+  if (state.ranks.some(r => r == null)) return;
+  submitBtn.disabled = true;
+  const r = await fetch("/rate", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      prompt: state.prompt,
+      rankings: state.ranks,
+      candidates: state.candidates,
+      errored: state.errored,
+      suspect: state.suspect,
+      temps: state.temps,
+      pending_id: state.pending_id,
+    }),
+  });
+  if (!r.ok) { statusEl.textContent = `submit failed: ${r.status}`; submitBtn.disabled = false; return; }
+  statusEl.textContent = `logged: ranks=${state.ranks.join(",")}`;
+  // If we were in review mode, auto-load next from queue.
+  if (state.pending_id) loadPending(true);
+  else updateReviewBtn();
+}
+
+async function loadPending(auto = false) {
+  const r = await fetch("/pending/next");
+  if (!r.ok) { statusEl.textContent = `queue err: ${r.status}`; return; }
+  const data = await r.json();
+  updateReviewBtn(data);
+  if (data.empty) {
+    statusEl.textContent = `queue empty (${data.total} total reviewed)`;
+    if (!auto) clearCards();
+    return;
+  }
+  const rec = data.record;
+  clearCards();
+  state = freshState(rec.prompt);
+  state.pending_id = rec.id;
+  promptInp.value = rec.prompt;
+  // Skip generation: directly fillCard for each candidate from the pending record.
+  for (let i = 0; i < nCandidates; i++) {
+    const code = rec.candidates[i] || "";
+    const wasErr = !!(rec.errored && rec.errored[i]);
+    const wasSus = !!(rec.suspect && rec.suspect[i]);
+    state.candidates[i] = code;
+    state.temps[i] = (rec.temps && rec.temps[i] != null) ? rec.temps[i] : null;
+    fillCard(i, code, state.temps[i], { errored: wasErr, suspect: wasSus });
+    // settled flips when iframe postMessages; for errored-from-pending mark settled now.
+    if (wasErr) state.settled[i] = true;
+  }
+  autoRankBads();
+  statusEl.textContent = `review ${data.reviewed + 1}/${data.total} — '${rec.prompt}'`;
+  skipBtn.disabled = false;
+}
+
+async function skipPending() {
+  if (!state || !state.pending_id) return;
+  await fetch("/pending/skip", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: state.pending_id }),
+  });
+  loadPending(true);
+}
+
+async function updateReviewBtn(known) {
+  let data = known;
+  if (!data) {
+    try { const r = await fetch("/pending/next"); data = await r.json(); }
+    catch { return; }
+  }
+  const rem = data.remaining || 0;
+  const tot = data.total || 0;
+  reviewBtn.textContent = `Review queue (${rem}/${tot})`;
+  reviewBtn.disabled = rem === 0;
+}
+
+async function generateOne(prompt, index, t0) {
+  setCardLoading(index, t0);
+  try {
+    const r = await fetch("/generate_one", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt, index }),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+    const data = await r.json();
+    state.candidates[index] = data.code || "";
+    state.temps[index] = data.temp;
+    if (data.error) {
+      fillCard(index, `// generation error: ${data.error}\nthrow new Error(${JSON.stringify(data.error)});`, data.temp, { errored: true });
+      state.settled[index] = true;
+    } else {
+      // server-side suspect flag: code has no draw calls -> probably blank
+      fillCard(index, data.code, data.temp, { suspect: !!data.suspect });
+      // settled will be set by iframe postMessage (ok or runtime error)
+    }
+  } catch (e) {
+    fillCard(index, `// fetch error: ${e.message}\nthrow new Error(${JSON.stringify(e.message)});`, null, { errored: true });
+    state.candidates[index] = "";
+    state.settled[index] = true;
+  }
+}
+
+window.addEventListener("message", (ev) => {
+  const d = ev.data;
+  if (!d || d.src !== "pickerCard" || !state) return;
+  const i = d.i;
+  if (typeof i !== "number" || i < 0 || i >= state.ranks.length) return;
+  state.settled[i] = true;
+  if (d.status === "error") {
+    // upgrade card to errored if not already; this overrides 'suspect'
+    const card = cards()[i];
+    state.errored[i] = true;
+    card.classList.add("errored", "locked");
+    card.classList.remove("suspect");
+    const badge = card.querySelector(".badge");
+    badge.className = "badge b-error";
+    badge.textContent = "ERROR";
+    // if we previously assigned a manual rank to this (we shouldn't have, since suspect locks it),
+    // unwind it. But if it was suspect-auto-ranked, leave at worst.
+    if (state.ranks[i] == null) state.ranks[i] = state.ranks.length;
+  }
+  // After every card has settled, lock auto-bad ranks
+  if (state.settled.every(Boolean)) autoRankBads();
+});
+
+async function generate() {
+  const prompt = promptInp.value.trim();
+  if (!prompt) return;
+  clearCards();
+  state = freshState(prompt);
+  setBusy(true);
+  const t0 = performance.now();
+  const tasks = [];
+  for (let i = 0; i < nCandidates; i++) tasks.push(generateOne(prompt, i, t0));
+  await Promise.allSettled(tasks);
+  statusEl.textContent = `gen done in ${((performance.now() - t0) / 1000).toFixed(1)}s`;
+  setBusy(false);
+  // Initial auto-rank (covers suspect/errored we already know about).
+  // Iframes may add more 'errored' via postMessage afterward.
+  autoRankBads();
+}
+
+goBtn.addEventListener("click", generate);
+reviewBtn.addEventListener("click", () => loadPending(false));
+skipBtn.addEventListener("click", skipPending);
+submitBtn.addEventListener("click", submitRanks);
+resetBtn.addEventListener("click", resetRanks);
+promptInp.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); generate(); } });
+cards().forEach((card, i) => {
+  card.querySelector(".frame-wrap").addEventListener("click", () => clickCard(i));
+  card.querySelectorAll(".rank-row button").forEach(b => {
+    b.addEventListener("click", () => setRank(i, parseInt(b.dataset.rank, 10)));
+  });
+});
+
+(async () => {
+  try {
+    const [h, c] = await Promise.all([fetch("/health"), fetch("/config")]);
+    const hd = await h.json();
+    const cd = await c.json();
+    nCandidates = cd.n || 3;
+    $("#backend-url").textContent = `${hd.url} (${h.ok ? "up" : "down"})`;
+  } catch { $("#backend-url").textContent = "unreachable"; }
+  updateReviewBtn();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,78 @@
+# 60 diverse pixel-art canvas prompts. Lines starting with # ignored.
+# Edit / extend freely.
+
+# animals
+a cute cat sitting
+a bunny eating a carrot
+a wise owl on a branch
+a goldfish in a bowl
+a small dragon breathing fire
+a smiling frog on a lily pad
+a penguin on an ice floe
+a sleepy panda
+a fox hiding in tall grass
+a hedgehog rolled into a ball
+
+# characters
+a knight in shiny armor with a sword
+a wizard casting a spell
+a tiny robot with antennae
+a ninja jumping mid-air
+an astronaut planting a flag
+a pirate with eyepatch and parrot
+a chef holding a wooden spoon
+a viking with a shield
+a scientist in a lab coat
+a cowboy on a horse
+
+# objects
+a wooden treasure chest
+a flickering candle
+a crystal ball glowing purple
+an old fountain pen
+a vintage telephone
+a stack of books with bookmark
+a key with ornate handle
+a sword stuck in a stone
+a magic wand sparkling
+a pair of glasses
+
+# nature
+a tree with autumn leaves
+a snowy mountain peak
+a desert with cactus and sun
+a calm pond with reeds
+a thunderstorm with lightning
+a small island with palm tree
+a forest path at sunset
+a flower garden with bees
+a moon over the ocean
+a campfire under the stars
+
+# food / drink
+a slice of pizza with pepperoni
+a tall burger with lettuce
+a cone of ice cream with sprinkles
+a steaming cup of coffee
+a sushi roll on a plate
+a chocolate cake with candles
+a bowl of ramen with chopsticks
+a glass of orange juice
+a donut with pink icing
+a watermelon slice
+
+# vehicles
+a small sailboat on the sea
+a vintage red car
+an airplane taking off
+a steam train with smoke
+a hot air balloon over hills
+a submarine underwater
+a rocket launching to space
+
+# scenes / compositions
+a knight fighting a dragon
+a cat sleeping by a window
+a tiny house in a snowy field
+a ghost in a haunted graveyard
+a treasure map on parchment
