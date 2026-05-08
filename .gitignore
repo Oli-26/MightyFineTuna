@@ -1,10 +1,15 @@
-# Data + generated state — never commit
-*.jsonl
-*.jsonl.bak
-reviewed.txt
-llama.log
-batch.log
+# Data + generated state — never commit working files at repo root
+/*.jsonl
+/*.jsonl.bak
+/reviewed.txt
+/llama.log
+/batch.log
 *.log
+
+# But DO commit shared/aggregated data dropped in results/
+# (prefs.jsonl files from each rater — see README "Sharing data")
+!results/
+!results/*.jsonl
 
 # Models
 *.gguf

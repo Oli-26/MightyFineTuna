@@ -71,14 +71,24 @@ Then in the UI, click **Review queue (X / Y)** — the picker walks you through 
 
 ## Multi-rater / multi-machine
 
-Each rank record is tagged with `host` (machine) and `model`. So friends with different rigs/models can run their own picker, send back their `prefs.jsonl`, and you merge:
+Each rank record is tagged with `host` (machine) and `model`. Rater workflow:
 
-```bash
-./merge.py prefs.jsonl friend1-prefs.jsonl friend2-prefs.jsonl --out combined.jsonl
-./merge.py --stats combined.jsonl   # report counts by model/host/schema
-```
+1. Collect ranks locally on your machine — they land in `prefs.jsonl` (gitignored).
+2. When ready to share, copy to `results/<your-name>-prefs.jsonl` and commit:
+   ```bash
+   cp prefs.jsonl results/oli-laptop-prefs.jsonl
+   git add results/oli-laptop-prefs.jsonl
+   git commit -m "data: add oli-laptop ranks"
+   git push
+   ```
+3. Pull others' contributions: `git pull` brings in `results/*.jsonl`.
+4. Aggregate everything:
+   ```bash
+   ./merge.py results/*.jsonl --out combined.jsonl
+   ./merge.py --stats results/*.jsonl   # counts by host/model/schema
+   ```
 
-Dedup is on `(ts, prompt, sha1(candidates))`.
+Dedup is on `(ts, prompt, sha1(candidates))`. Root `prefs.jsonl` stays private (raw, possibly messy); `results/*.jsonl` is the clean shared pool.
 
 ## Data schema
 
