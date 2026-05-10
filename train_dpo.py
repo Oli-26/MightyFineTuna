@@ -126,6 +126,9 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--merged-base-dir", default=None,
                     help="path to save merged base. defaults under checkpoints/")
+    ap.add_argument("--resume-from", default=None,
+                    help="resume from a HF Trainer checkpoint dir (e.g. ../checkpoint-832). "
+                         "Continues optimizer + scheduler state.")
     args = ap.parse_args()
 
     pairs, total_recs = collect_pairs(args.include_auto, not args.no_private)
@@ -269,8 +272,12 @@ def main() -> int:
         print("ERROR: nothing trainable — bailing", file=sys.stderr); return 1
 
     t0 = time.time()
-    print(f"\n[dpo] starting: {args.epochs} epochs × {len(ds)} pairs → {out_dir}", flush=True)
-    trainer.train()
+    if args.resume_from:
+        print(f"\n[dpo] RESUMING from {args.resume_from}", flush=True)
+        trainer.train(resume_from_checkpoint=args.resume_from)
+    else:
+        print(f"\n[dpo] starting: {args.epochs} epochs × {len(ds)} pairs → {out_dir}", flush=True)
+        trainer.train()
     dt = time.time() - t0
     print(f"\n=== DPO done in {dt/60:.1f} min ===")
 
