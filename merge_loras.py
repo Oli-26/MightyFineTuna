@@ -166,7 +166,12 @@ def main() -> int:
         n = len(adapter_paths)
         for i in range(args.random_mix):
             ws = rng.dirichlet([args.alpha] * n)
-            out = Path(adapter_paths[0]).parent / f"{args.out_prefix}{i:02d}"
+            # If prefix contains a path separator, treat as a path; else nest under
+            # the first adapter's parent dir.
+            if "/" in args.out_prefix:
+                out = Path(f"{args.out_prefix}{i:02d}")
+            else:
+                out = Path(adapter_paths[0]).parent / f"{args.out_prefix}{i:02d}"
             merge_weighted(adapter_paths, ws.tolist(), out)
             label = " ".join(f"{w:.2f}" for w in ws)
             print(f"  {out.name}: weights = [{label}]")

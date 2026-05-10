@@ -1,9 +1,34 @@
 """Shared system-prompt variants for picker, training, inference.
 
-Five variants used in A/B testing. Picker (server.py) picks one via SYSTEM_PROMPT_ID
-env var per batch round. Trainer/inference scripts default to variant A.
+Variants A-E used in initial A/B testing. F = A + 3 grafted few-shot examples
+loaded from fewshot_examples.json (rebuild via build_fewshot.py).
+
+Picker (server.py) picks one via SYSTEM_PROMPT_ID env var per batch round.
+Trainer/inference scripts default to variant A.
 """
 from __future__ import annotations
+
+import json as _json
+from pathlib import Path as _Path
+
+_FEWSHOT_PATH = _Path(__file__).parent / "fewshot_examples.json"
+
+
+def _fewshot_block() -> str:
+    if not _FEWSHOT_PATH.exists():
+        return ""
+    try:
+        examples = _json.loads(_FEWSHOT_PATH.read_text())
+    except Exception:
+        return ""
+    if not examples:
+        return ""
+    blocks = []
+    for ex in examples:
+        blocks.append(f"Example — prompt: {ex['prompt']!r}\n```javascript\n{ex['code']}\n```")
+    return ("\nReference examples (these are the kind of output we want — study the "
+            "style, palette, layering, then apply to the user's prompt):\n\n"
+            + "\n\n".join(blocks) + "\n")
 
 _HARD_RULES = """Hard rules — follow EXACTLY:
 1. Write TOP-LEVEL STATEMENTS only. They execute immediately.
@@ -97,6 +122,21 @@ Style — rich, detailed maximalist pixel art:
 Now produce the code for the user's prompt. Output JavaScript only.
 """,
 }
+
+
+SYSTEM_PROMPT_VARIANTS["F"] = f"""You output a JavaScript snippet that draws on an HTML canvas.
+
+{_WRAPPER_NOTE}
+{_HARD_RULES}
+Style — composition-first pixel art:
+- Integer coordinates; blocky shapes via fillRect (sparingly: arc/ellipse).
+- Limited palette (~4-8 distinct colors). Pick a coherent palette for the subject.
+- ALWAYS paint a full background first (sky, ground, or solid mood color).
+- Compose deliberately; use shading (darker undersides, lighter highlights).
+- Every prompt should produce a recognizable scene, not a single shape on a blank field.
+{_fewshot_block()}
+Now produce the code for the user's prompt. Output JavaScript only.
+"""
 
 
 def get(variant_id: str = "A") -> str:

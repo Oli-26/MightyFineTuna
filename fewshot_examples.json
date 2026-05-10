@@ -1,0 +1,17 @@
+[
+  {
+    "prompt": "a wooden treasure chest",
+    "code": "ctx.fillStyle = '#3e2723';\n    ctx.fillRect(50, 150, 300, 200);\n    ctx.fillStyle = '#5d4037';\n    ctx.fillRect(60, 160, 280, 180);\n    ctx.fillStyle = '#281814';\n    ctx.fillRect(60, 160, 280, 20);\n    ctx.fillStyle = '#281814';\n    ctx.fillRect(60, 320, 280, 20);\n    ctx.fillStyle = '#281814';\n    ctx.fillRect(60, 160, 20, 180);\n    ctx.fillStyle = '#281814';\n    ctx.fillRect(320, 160, 20, 180);\n    ctx.fillStyle = '#3e2723';\n    ctx.fillRect(170, 160, 60, 170);\n    ctx.fillStyle = '#1a0f0b';\n    ctx.fillRect(180, 170, 40, 150);\n    ctx.fillStyle = '#e44';\n    ctx.fillRect(190, 300, 20, 20);\n    ctx.fillRect(190, 180, 20, 20);\n    ctx.fillRect(210, 300, 20, 20);\n    ctx.fillRect(210, 180, 20, 20);\n    ctx.fillStyle = '#ffd700';\n    ctx.fillRect(185, 240, 50, 10);\n    ctx.fillRect(190, 245, 40, 5);\n    ctx.fillStyle = '#8d6e63';\n    ctx.fillRect(50, 130, 50, 20);\n    ctx.fillRect(300, 130, 50, 20);\n    ctx.fillRect(50, 370, 50, 20);\n    ctx.fillRect(300, 370, 50, 20);",
+    "source_model": "Qwen3-Coder-Next-IQ4_XS.gguf"
+  },
+  {
+    "prompt": "an alien with three eyes",
+    "code": "ctx.fillStyle = '#228B22';\nctx.fillRect(0, 0, W, H);\nctx.fillStyle = '#32CD32';\nctx.fillRect(50, 100, 300, 200);\nctx.fillStyle = '#006400';\nctx.fillRect(50, 100, 300, 50);\nctx.fillStyle = '#FFF';\nctx.fillRect(120, 130, 40, 40);\nctx.fillStyle = '#FFF';\nctx.fillRect(180, 130, 40, 40);\nctx.fillStyle = '#FFF';\nctx.fillRect(240, 130, 40, 40);\nctx.fillStyle = '#000';\nctx.fillRect(130, 140, 20, 20);\nctx.fillStyle = '#000';\nctx.fillRect(190, 140, 20, 20);\nctx.fillStyle = '#000';\nctx.fillRect(250, 140, 20, 20);\nctx.fillStyle = '#FFD700';\nctx.fillRect(150, 180, 100, 30);\nctx.fillStyle = '#8B4513';\nctx.fillRect(180, 210, 40, 20);",
+    "source_model": "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"
+  },
+  {
+    "prompt": "concentric circles in pastel colors",
+    "code": "ctx.fillStyle = '#f8f9fa';\nctx.fillRect(0, 0, W, H);\n\nconst centerX = W / 2;\nconst centerY = H / 2;\nconst maxRadius = Math.min(W, H) / 2 - 20;\n\nconst colors = [\n  '#ffd1dc', // pastel pink\n  '#c9e9ff', // pastel blue\n  '#d0f4de', // pastel green\n  '#fff9b7', // pastel yellow\n  '#e6c5ff', // pastel purple\n  '#ffb3c6'  // pastel rose\n];\n\nfor (let i = 0; i < 6; i++) {\n  const radius = maxRadius - i * 30;\n  ctx.beginPath();\n  ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);\n  ctx.fillStyle = colors[i];\n  ctx.fill();\n  \n  // Add a subtle border to each circle\n  ctx.strokeStyle = '#ffffff';\n  ctx.lineWidth = 2;\n  ctx.stroke();\n}",
+    "source_model": "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"
+  }
+]

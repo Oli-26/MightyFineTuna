@@ -190,6 +190,10 @@ class RateReq(BaseModel):
     errored: list[bool]
     suspect: list[bool]
     temps: list[float] | None = None
+    top_ps: list[float | None] | None = None
+    min_ps: list[float | None] | None = None
+    max_tokens: list[int | None] | None = None
+    system_prompt_ids: list[str | None] | None = None
     pending_id: str | None = None  # if from review queue, mark this as reviewed
 
 
@@ -345,13 +349,43 @@ async def pick(req: PickReq):
     return {"ok": True, "logged": str(PREFS)}
 
 
+def _find_pending(pending_id: str) -> dict | None:
+    for rec in _iter_pending():
+        if rec.get("id") == pending_id:
+            return rec
+    return None
+
+
 @app.post("/rate")
 async def rate(req: RateReq):
     n = len(req.candidates)
     if not (len(req.rankings) == n == len(req.errored) == len(req.suspect)):
         raise HTTPException(400, "rankings/errored/suspect length must match candidates")
-    async with httpx.AsyncClient() as client:
-        model_name = await _get_model_name(client)
+
+    # Hydrate sampler/sp metadata from the original pending record if this came
+    # from the review queue — pending records have per-candidate temps/top_p/min_p/
+    # max_tokens/sp_id that the picker UI normally drops on submit.
+    pend = _find_pending(req.pending_id) if req.pending_id else None
+    temps = req.temps if req.temps is not None else (pend.get("temps") if pend else None)
+    top_ps = req.top_ps if req.top_ps is not None else (pend.get("top_ps") if pend else None)
+    min_ps = req.min_ps if req.min_ps is not None else (pend.get("min_ps") if pend else None)
+    max_tokens = req.max_tokens if req.max_tokens is not None else (pend.get("max_tokens") if pend else None)
+    sp_ids = req.system_prompt_ids
+    if sp_ids is None:
+        if pend:
+            pend_sp = pend.get("system_prompt_id")
+            if pend_sp is not None:
+                sp_ids = [pend_sp] * n
+        else:
+            # direct gen path — picker used the live SYSTEM_PROMPT_ID for every cand
+            sp_ids = [SYSTEM_PROMPT_ID] * n
+
+    if pend:
+        model_name = pend.get("model") or "?"
+    else:
+        async with httpx.AsyncClient() as client:
+            model_name = await _get_model_name(client)
+
     rec = {
         "ts": time.time(),
         "schema": "rank-v1",
@@ -362,7 +396,11 @@ async def rate(req: RateReq):
         "candidates": req.candidates,
         "errored": req.errored,
         "suspect": req.suspect,
-        "temps": req.temps,
+        "temps": temps,
+        "top_ps": top_ps,
+        "min_ps": min_ps,
+        "max_tokens": max_tokens,
+        "system_prompt_ids": sp_ids,
         "pending_id": req.pending_id,
     }
     with PREFS.open("a") as f:
@@ -384,17 +422,28 @@ def _mark_reviewed(pending_id: str) -> None:
 
 
 def _iter_pending() -> list[dict]:
-    if not PENDING.exists():
-        return []
+    import glob
+    paths = []
+    if PENDING.exists():
+        paths.append(str(PENDING))
+    paths.extend(sorted(glob.glob(str(ROOT / "results" / "*-pending.jsonl"))))
+    seen_ids: set[str] = set()
     out = []
-    for line in PENDING.read_text().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            out.append(json.loads(line))
-        except Exception:
-            pass
+    for fp in paths:
+        for line in Path(fp).read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            rid = rec.get("id")
+            if rid and rid in seen_ids:
+                continue
+            if rid:
+                seen_ids.add(rid)
+            out.append(rec)
     return out
 
 
@@ -417,11 +466,38 @@ async def pending_next():
 
 @app.post("/pending/skip")
 async def pending_skip(body: dict):
+    """Mark a pending record reviewed AND log a negative rank-v1 record:
+    all candidates tied at worst rank with suspect=True so train_sft.py skips
+    them and analyze_prefs counts them as flagged. Treats 'skip' as 'all terrible'.
+    """
     pid = body.get("id")
     if not pid:
         raise HTTPException(400, "missing id")
+    pend = _find_pending(pid)
+    if pend:
+        n = len(pend.get("candidates") or [])
+        rec = {
+            "ts": time.time(),
+            "schema": "rank-v1",
+            "model": pend.get("model") or "?",
+            "host": HOST_TAG,
+            "prompt": pend.get("prompt", ""),
+            "rankings": [n] * n,                  # everyone tied at worst rank
+            "candidates": pend.get("candidates") or [],
+            "errored": pend.get("errored") or [False] * n,
+            "suspect": [True] * n,                # mark all as suspect → trainer drops
+            "temps": pend.get("temps"),
+            "top_ps": pend.get("top_ps"),
+            "min_ps": pend.get("min_ps"),
+            "max_tokens": pend.get("max_tokens"),
+            "system_prompt_ids": [pend.get("system_prompt_id")] * n if pend.get("system_prompt_id") else None,
+            "pending_id": pid,
+            "skip_reason": "all_terrible",
+        }
+        with PREFS.open("a") as f:
+            f.write(json.dumps(rec) + "\n")
     _mark_reviewed(pid)
-    return {"ok": True}
+    return {"ok": True, "logged_negative": bool(pend)}
 
 
 @app.get("/history")

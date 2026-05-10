@@ -1,0 +1,60 @@
+# Fresh eval prompts (v2) — never used in training or prior eval rounds.
+# Used to neutralize human-rater bias from seeing same outputs repeatedly.
+
+# animals
+a fennec fox in moonlight
+an axolotl in pink water
+a peacock with full tail display
+a sloth hanging from a vine
+
+# mythical / fantasy
+a phoenix rising from flames
+a mermaid on a rock
+a kraken attacking a ship
+a unicorn under a rainbow
+
+# characters
+a detective with magnifying glass
+a blacksmith hammering metal
+a librarian surrounded by books
+a deep-sea diver in dark water
+
+# vehicles
+a hot air balloon over fields
+a steam locomotive at a station
+a vintage motorcycle
+a sailboat in stormy sea
+
+# nature scenes
+a misty forest at dawn
+a coral reef teeming with fish
+a lighthouse on a cliff
+an aurora over mountains
+
+# food
+a slice of pizza on a plate
+a bowl of ramen with chopsticks
+a cupcake with sprinkles
+a glass of red wine
+
+# objects
+a music box opened
+a marble chess board mid-game
+a bouquet of sunflowers
+a stack of vinyl records
+
+# abstract / pattern
+a geometric mandala
+a fractal spiral in cool tones
+
+# more — extending to 40 total
+a teapot pouring steaming tea
+an old typewriter with paper inserted
+a glowing jellyfish in deep ocean
+a campfire with marshmallows on sticks
+a wizard's spellbook open on a desk
+a robot reading a book
+a snail with a spiral shell
+a mountain goat on a cliff edge
+a lantern hanging from a branch
+a sushi platter with chopsticks
