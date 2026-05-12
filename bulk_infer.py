@@ -63,6 +63,8 @@ def main() -> int:
     ap.add_argument("--max-tokens", type=int, default=2500, help="bumped for eval; training data uses batch_gen.py defaults")
     ap.add_argument("--system-prompt-id", default="A", choices=list(SYSTEM_PROMPT_VARIANTS))
     ap.add_argument("--overwrite", action="store_true")
+    ap.add_argument("--batch-size", type=int, default=1,
+                    help="prompts per generate() call. >1 enables true batching (left-padded).")
     args = ap.parse_args()
 
     prompts = load_prompts(Path(args.prompts))
@@ -70,19 +72,49 @@ def main() -> int:
         print("no prompts"); return 1
     print(f"[bulk] {len(prompts)} prompts × {len(args.adapters)} adapters = {len(prompts)*len(args.adapters)} gens")
 
+    # Early-skip BEFORE loading torch/model: if every adapter's output file
+    # already contains all prompts, there's nothing to do. Loading torch and
+    # then exiting can hang on ROCm Windows CUDA teardown.
+    out_dir_pre = Path(args.out_dir)
+    pending_adapters = []
+    for adapter_path in args.adapters:
+        nm = Path(adapter_path).name
+        out_path = out_dir_pre / f"{args.out_prefix}{nm}.jsonl"
+        if not out_path.exists() or args.overwrite:
+            pending_adapters.append(adapter_path); continue
+        seen = set()
+        for line in out_path.read_text().splitlines():
+            try: seen.add(json.loads(line)["prompt"])
+            except Exception: pass
+        if any(p not in seen for p in prompts):
+            pending_adapters.append(adapter_path)
+    if not pending_adapters:
+        print("[bulk] all adapters complete, nothing to do")
+        return 0
+
     print("[bulk] loading torch + transformers...", flush=True)
     import torch
     from transformers import AutoTokenizer, AutoModelForCausalLM
     from peft import PeftModel
+    # torch ROCm Windows wheel lacks torch.distributed.fsdp;
+    # transformers.generate() imports is_fsdp_managed_module into generation.utils,
+    # so patch both that module and the source module to be safe.
+    _stub = lambda *a, **k: False
+    import transformers.integrations.fsdp as _fsdp_mod
+    import transformers.generation.utils as _gen_utils
+    _fsdp_mod.is_fsdp_managed_module = _stub
+    _gen_utils.is_fsdp_managed_module = _stub
 
     print(f"[bulk] cuda: {torch.cuda.is_available()} | device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'}")
 
     print(f"[bulk] base: {args.base}")
     tok = AutoTokenizer.from_pretrained(args.base)
     if tok.pad_token is None: tok.pad_token = tok.eos_token
+    if args.batch_size > 1:
+        tok.padding_side = "left"  # required for batched generation
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     base = AutoModelForCausalLM.from_pretrained(
-        args.base, dtype=dtype, device_map="auto" if torch.cuda.is_available() else None,
+        args.base, torch_dtype=dtype, device_map="auto" if torch.cuda.is_available() else None,
     )
     base.eval()
 
@@ -90,13 +122,18 @@ def main() -> int:
     print(f"[bulk] system prompt: {args.system_prompt_id} ({len(sp_text)} chars)")
 
     # Wrap in PEFT once with first adapter, then load+set further adapters.
-    first = args.adapters[0]
-    print(f"[bulk] wrapping with first adapter: {Path(first).name}")
-    model = PeftModel.from_pretrained(base, first, adapter_name=Path(first).name)
-    for a in args.adapters[1:]:
-        nm = Path(a).name
-        print(f"[bulk] loading adapter: {nm}")
-        model.load_adapter(a, adapter_name=nm)
+    # Special sentinel: --adapters none → run the base model directly with no LoRA.
+    if args.adapters == ["none"]:
+        print("[bulk] no adapter mode — base model directly")
+        model = base
+    else:
+        first = args.adapters[0]
+        print(f"[bulk] wrapping with first adapter: {Path(first).name}")
+        model = PeftModel.from_pretrained(base, first, adapter_name=Path(first).name)
+        for a in args.adapters[1:]:
+            nm = Path(a).name
+            print(f"[bulk] loading adapter: {nm}")
+            model.load_adapter(a, adapter_name=nm)
     model.eval()
 
     out_dir = Path(args.out_dir)
@@ -119,14 +156,20 @@ def main() -> int:
             print(f"[bulk] {nm}: all done, skip")
             continue
 
-        model.set_adapter(nm)
+        if args.adapters != ["none"]:
+            model.set_adapter(nm)
         print(f"\n[bulk] === {nm} ({len(todo)} prompts) ===", flush=True)
 
-        for i, prompt in enumerate(todo, 1):
+        bs = max(1, args.batch_size)
+        done = 0
+        for bstart in range(0, len(todo), bs):
+            batch_prompts = todo[bstart : bstart + bs]
             t0 = time.time()
-            msgs = [{"role":"system","content":sp_text},{"role":"user","content":prompt}]
-            text = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
-            inputs = tok(text, return_tensors="pt").to(model.device)
+            texts = []
+            for p in batch_prompts:
+                msgs = [{"role":"system","content":sp_text},{"role":"user","content":p}]
+                texts.append(tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True))
+            inputs = tok(texts, return_tensors="pt", padding=True).to(model.device)
             prompt_len = inputs["input_ids"].shape[-1]
             try:
                 with torch.no_grad():
@@ -137,26 +180,28 @@ def main() -> int:
                         do_sample=True,
                         pad_token_id=tok.eos_token_id,
                     )
-                new_ids = out[0][prompt_len:]
+            except Exception as e:
+                print(f"  ERR batch {bstart}: {e}")
+                continue
+            dt = time.time() - t0
+            for k, p in enumerate(batch_prompts):
+                new_ids = out[k][prompt_len:]
                 raw = tok.decode(new_ids, skip_special_tokens=True)
                 code = strip_fences(raw)
-            except Exception as e:
-                print(f"  ERR {prompt!r}: {e}")
-                continue
-            rec = {
-                "ts": time.time(),
-                "side": nm,
-                "model": f"{args.base}+adapter:{nm}",
-                "prompt": prompt,
-                "code": code,
-                "raw_len": len(raw),
-                "temp": args.temp,
-                "system_prompt_id": args.system_prompt_id,
-            }
-            with out_path.open("a") as f:
-                f.write(json.dumps(rec) + "\n")
-            dt = time.time() - t0
-            print(f"  [{i}/{len(todo)}] {prompt!r} -> {len(code)} chars ({dt:.1f}s)", flush=True)
+                rec = {
+                    "ts": time.time(),
+                    "side": nm,
+                    "model": f"{args.base}+adapter:{nm}",
+                    "prompt": p,
+                    "code": code,
+                    "raw_len": len(raw),
+                    "temp": args.temp,
+                    "system_prompt_id": args.system_prompt_id,
+                }
+                with out_path.open("a") as f:
+                    f.write(json.dumps(rec) + "\n")
+                done += 1
+                print(f"  [{done}/{len(todo)}] {p!r} -> {len(code)} chars ({dt/len(batch_prompts):.1f}s avg)", flush=True)
 
         print(f"[bulk] wrote {out_path.name}")
 
@@ -166,4 +211,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    rc = main()
+    # PyTorch ROCm Windows can hang in CUDA context teardown. Force-exit so the
+    # next pipeline step can run.
+    import os
+    os._exit(rc)

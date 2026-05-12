@@ -19,9 +19,10 @@
 
   /* dynamic grid: 2 / 3 / 4 columns */
   #grid { display: grid; gap: 14px; }
+  #grid.n1 { grid-template-columns: 1fr; max-width: 800px; margin: 0 auto; }
   #grid.n2 { grid-template-columns: 1fr 1fr; }
   #grid.n3 { grid-template-columns: 1fr 1fr 1fr; }
-  #grid.n4 { grid-template-columns: 1fr 1fr; }  /* 2x2 for 4 */
+  #grid.n4 { grid-template-columns: repeat(2, 400px); justify-content: center; }  /* 2x2 fixed 400px for 4 */
 
   .card { background: #16161a; border: 2px solid #2a2a30; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; min-width: 0; position: relative; }
   .card.ranked { border-color: #4ade80; box-shadow: 0 0 0 2px #4ade8033; }

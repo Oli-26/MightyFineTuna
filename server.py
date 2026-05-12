@@ -26,8 +26,8 @@ STATIC = ROOT / "static"
 PREFS = ROOT / "prefs.jsonl"
 PENDING = ROOT / "pending.jsonl"
 REVIEWED = ROOT / "reviewed.txt"  # one pending id per line
-EVAL_PAIRS = ROOT / "eval_pairs.jsonl"
-EVAL_JUDGMENTS = ROOT / "eval_judgments.jsonl"
+EVAL_PAIRS = ROOT / os.environ.get("EVAL_PAIRS", "eval_pairs.jsonl")
+EVAL_JUDGMENTS = ROOT / os.environ.get("EVAL_JUDGMENTS", "eval_judgments.jsonl")
 
 LLAMA_URL = os.environ.get("LLAMA_URL", "http://127.0.0.1:8080")
 N_CANDIDATES = int(os.environ.get("N_CANDIDATES", "3"))

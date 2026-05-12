@@ -5,11 +5,18 @@
 /llama.log
 /batch.log
 *.log
+*.err
 
 # But DO commit shared/aggregated data dropped in results/
 # (prefs.jsonl files from each rater — see README "Sharing data")
 !results/
 !results/*.jsonl
+
+# AND commit eval-session data so other machines can train on it
+!/eval_judgments_*.jsonl
+!/eval_pairs_*.jsonl
+!/training_pairs_*.jsonl
+!/prefs.jsonl
 
 # Models
 *.gguf
@@ -17,12 +24,28 @@
 # Python / venvs
 __pycache__/
 .venv/
+.venv-fast/
 *.pyc
 
 # Editor / OS junk
 .vscode/
 .idea/
 .DS_Store
+.claude/
 
 # Training outputs
 /checkpoints/
+
+# Intermediate / transient
+/sides_*_tmp/
+/sides_v3_relabeled/
+/sides_v6_sanity/
+/sides_gen5_eval_tmp/
+/sides_fresh_tmp/
+/sides_intermodel_tmp/
+/fast_train.*
+/setup_test_report*.txt
+/merge.*
+/dpo.*
+/bulk.*
+/server.*

@@ -190,6 +190,13 @@ def main() -> int:
     from peft import LoraConfig
     from datasets import Dataset
     from trl import DPOTrainer, DPOConfig
+    # Apply Liger Kernel before model load for fused RMSNorm/RoPE/etc.
+    try:
+        from liger_kernel.transformers import apply_liger_kernel_to_qwen2
+        apply_liger_kernel_to_qwen2()
+        print("[dpo] Liger Kernel applied to Qwen2", flush=True)
+    except Exception as _e:
+        print(f"[dpo] Liger Kernel NOT applied: {_e}", flush=True)
 
     print(f"cuda={torch.cuda.is_available()} | dev={torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'}")
 

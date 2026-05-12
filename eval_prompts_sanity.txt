@@ -1,0 +1,5 @@
+# 4-prompt sanity set for gen5 visual check
+a dragon breathing fire
+an alchemist mixing potions
+a waterfall in a jungle
+a hamburger with toppings

@@ -1,0 +1,1 @@
+{"ts": 1778502350.6524203, "schema": "blind-judge-multi-v1", "pair_id": "370c8837-5733-449d-9f22-813f106e3c75", "prompt": "a blacksmith hammering metal", "rankings": [1], "slot_labels": ["3b-dpo-v2-2ep-t05"], "per_label_rank": {"3b-dpo-v2-2ep-t05": 1}, "models_per_label": {"3b-dpo-v2-2ep-t05": "checkpoints/3b-dpo-merged-v2+adapter:3b-dpo-v2-2ep"}}

@@ -1,0 +1,62 @@
+# Fresh eval prompts (v3) — never used in any training or prior eval round.
+# Designed to span the same category variety as eval_prompts_v2.txt without overlap.
+
+# animals
+a hummingbird sipping nectar
+a snow leopard on a cliff
+an octopus on the seafloor
+a wolf howling at the moon
+
+# mythical / fantasy
+a dragon breathing fire
+a centaur drawing a bow
+a basilisk coiled in a cave
+a griffin in flight
+
+# characters
+an alchemist mixing potions
+a knight in shining armor
+a samurai with katana
+a witch stirring a cauldron
+
+# vehicles
+a vintage biplane in flight
+a gondola on a canal
+a moon rover on lunar surface
+a hot rod with flames
+
+# nature scenes
+a waterfall in a jungle
+a savanna at sunset
+a glacier face with cracks
+a bamboo grove in mist
+
+# food
+a hamburger with toppings
+a sushi roll platter
+an ice cream sundae
+a baguette and cheese board
+
+# objects
+a chandelier with candles
+an antique compass
+an ornate sword on display
+a sand-timer hourglass
+
+# abstract
+a stained glass window
+a kaleidoscope view
+a celtic knot pattern
+an op art checkerboard
+
+# scenes
+a medieval marketplace
+a chemistry lab with beakers
+a jazz club at night
+a haunted manor
+
+# misc
+a koi pond with lotus
+a butterfly on a flower
+a treasure chest open
+a snow globe with village
